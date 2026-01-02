@@ -1,0 +1,16 @@
+[package]
+name = "md-fixup"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "Markdown linter that normalizes formatting and wraps text"
+license = "MIT"
+
+[[bin]]
+name = "md-fixup"
+path = "src/main.rs"
+
+[dependencies]
+regex = "1.10"
+clap = { version = "4.4", features = ["derive"] }
+tempfile = "3.10"

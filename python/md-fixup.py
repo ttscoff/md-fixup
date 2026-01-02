@@ -26,6 +26,7 @@ Markdown linter that:
 23. Normalizes emoji names (spellcheck and correct typos using fuzzy matching)
 24. Normalizes typography (curly quotes to straight, en/em dashes, ellipses, guillemets)
 25. Normalizes bold/italic markers (bold: always __, italic: always *)
+26. Normalizes list markers (renumbers ordered lists, standardizes bullet markers by level)
 
 Table cleanup script: Dr. Drang <https://leancrew.com/>
 """
@@ -1553,6 +1554,99 @@ def get_list_indent(line):
     match = re.match(r'^(\s*)', line)
     return len(match.group(1)) if match else 0
 
+def get_list_level(indent_str, indent_unit=2):
+    """Get the list nesting level (0-based) based on indentation"""
+    # Count tabs and spaces
+    tab_count = indent_str.count('\t')
+    space_count = len(indent_str.replace('\t', ''))
+    # Convert spaces to equivalent tabs based on indent_unit
+    total_indent = tab_count + (space_count // indent_unit)
+    return total_indent
+
+def normalize_list_markers(line, list_context_stack, indent_unit=2):
+    """Normalize list markers based on indentation level
+
+    Args:
+        line: The list item line to normalize
+        list_context_stack: List of (level, list_type, current_number) tuples tracking list state
+        indent_unit: Base indentation unit (2 or 4 spaces per tab)
+
+    Returns:
+        (normalized_line, updated_stack, changed)
+    """
+    if not is_list_item(line):
+        return line, list_context_stack, False
+
+    match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+    if not match:
+        return line, list_context_stack, False
+
+    indent = match.group(1)
+    marker = match.group(2)
+    marker_space = match.group(3)
+    content = match.group(4)
+
+    # Calculate current level
+    current_level = get_list_level(indent, indent_unit)
+
+    # Determine if this is a numbered list or bulleted list
+    is_numbered = bool(re.match(r'^\d+\.', marker))
+
+    # Update the stack - remove contexts for deeper levels (but keep same or shallower)
+    # This allows us to return to previous levels and continue those lists
+    list_context_stack = [ctx for ctx in list_context_stack if ctx[0] <= current_level]
+
+    # Check if we have a context for this exact level
+    matching_context = None
+    for ctx in reversed(list_context_stack):
+        if ctx[0] == current_level:
+            matching_context = ctx
+            break
+
+    if matching_context:
+        # Continue existing list at this level
+        level, list_type, current_number = matching_context
+        idx = list_context_stack.index(matching_context)
+
+        if list_type == 'numbered':
+            # Continue numbering
+            current_number += 1
+            list_context_stack[idx] = (level, list_type, current_number)
+            new_marker = f'{current_number}.'
+        else:
+            # Bulleted list - use marker based on level
+            if current_level == 0:
+                new_marker = '*'
+            elif current_level == 1:
+                new_marker = '-'
+            else:
+                new_marker = '+'
+    else:
+        # New list at this level
+        if is_numbered:
+            list_context_stack.append((current_level, 'numbered', 1))
+            new_marker = '1.'
+        else:
+            list_context_stack.append((current_level, 'bulleted', None))
+            # Determine bullet marker based on level
+            if current_level == 0:
+                new_marker = '*'
+            elif current_level == 1:
+                new_marker = '-'
+            else:
+                new_marker = '+'
+
+    # Check if marker changed
+    changed = (marker != new_marker)
+
+    # Build new line
+    has_newline = line.endswith('\n')
+    normalized = indent + new_marker + marker_space + content
+    if has_newline:
+        normalized += '\n'
+
+    return normalized, list_context_stack, changed
+
 def is_blockquote(line):
     """Check if line is a blockquote"""
     stripped = line.lstrip()
@@ -1567,7 +1661,7 @@ def get_blockquote_prefix(line):
     return ''
 
 def should_preserve_line(line):
-    """Check if line should not be wrapped (code blocks, headers, etc.)"""
+    """Check if line should not be wrapped (code blocks, headers, tables, etc.)"""
     stripped = line.strip()
     # Fenced code blocks
     if is_code_block(line):
@@ -1577,6 +1671,9 @@ def should_preserve_line(line):
         return True
     # Horizontal rules
     if is_horizontal_rule(line):
+        return True
+    # Tables (lines with pipes)
+    if '|' in stripped:
         return True
     # Empty lines
     if not stripped:
@@ -1640,6 +1737,7 @@ LINTING_RULES = {
     23: ("Normalize emoji names (spellcheck and correct)", "emoji-spellcheck"),
     24: ("Normalize typography (curly quotes, dashes, ellipses, guillemets). Sub-keywords: em-dash, guillemet", "typography"),
     25: ("Normalize bold/italic markers (bold: __, italic: *)", "bold-italic"),
+    26: ("Normalize list markers (renumber ordered lists, standardize bullet markers by level)", "list-markers"),
 }
 
 # Create keyword to rule number mapping
@@ -1678,6 +1776,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
     changes_made = False
     consecutive_blank_lines = 0
     current_list_indent_unit = None  # Cache the indent unit for the current list block
+    list_context_stack = []  # Track list nesting: [(level, type, number), ...]
 
     while i < len(lines):
         line = lines[i]
@@ -1934,6 +2033,56 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 # Look ahead to find the first indented list item to determine the unit
                 current_list_indent_unit = detect_list_indent_unit(lines, i)
 
+            # Check for CommonMark interrupted list: bullet <-> numbered at same level
+            # Do this BEFORE normalization so we can detect the original marker types
+            list_indent_before = get_list_indent(line)
+            match_current_orig = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+            interruption_detected = False
+            if match_current_orig and output:
+                current_marker_orig = match_current_orig.group(2)
+                current_is_numbered_orig = bool(re.match(r'^\d+\.', current_marker_orig))
+
+                # Check previous output line (skip blank lines)
+                prev_line = None
+                for j in range(len(output) - 1, -1, -1):
+                    if output[j].strip():
+                        prev_line = output[j]
+                        break
+
+                if prev_line and is_list_item(prev_line):
+                    prev_indent = get_list_indent(prev_line)
+                    match_prev = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', prev_line)
+                    if match_prev:
+                        prev_marker = match_prev.group(2)
+                        prev_is_numbered = bool(re.match(r'^\d+\.', prev_marker))
+
+                        # If same level and marker type changed (bullet <-> numbered): split the list
+                        if (prev_indent == list_indent_before and
+                            prev_is_numbered != current_is_numbered_orig):
+                            interruption_detected = True
+                            # Remove context for this level so the new list type starts fresh
+                            if current_list_indent_unit is None:
+                                current_list_indent_unit = detect_list_indent_unit(lines, i)
+                            interrupt_level = get_list_level(match_current_orig.group(1), current_list_indent_unit)
+                            list_context_stack = [ctx for ctx in list_context_stack if ctx[0] != interrupt_level]
+                            # Insert: blank line, HTML comment, blank line
+                            output.append('\n')
+                            output.append('<!-- -->\n')
+                            output.append('\n')
+                            changes_made = True
+
+            # Normalize list markers (renumber ordered lists, standardize bullet markers)
+            # Do this before converting spaces to tabs so level calculation works correctly
+            if 26 not in skip_rules:
+                if current_list_indent_unit is None:
+                    current_list_indent_unit = detect_list_indent_unit(lines, i)
+                normalized_line, list_context_stack, marker_changed = normalize_list_markers(
+                    line, list_context_stack, current_list_indent_unit
+                )
+                if marker_changed:
+                    line = normalized_line
+                    changes_made = True
+
             # Convert list indentation spaces to tabs based on detected unit
             if 12 not in skip_rules:
                 line = spaces_to_tabs_for_list(line, current_list_indent_unit)
@@ -1941,6 +2090,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                     changes_made = True
 
             list_indent = get_list_indent(line)
+
             # Ensure blank line before list (unless nested or after another list)
             if 8 not in skip_rules:
                 if output and output[-1].strip():
@@ -1998,8 +2148,9 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 if i + 1 < len(lines):
                     next_line = lines[i + 1]
                     if next_line.strip() and not is_list_item(next_line):
-                        # Next line is not a list item - reset indent unit cache for next list
+                        # Next line is not a list item - reset indent unit cache and list context for next list
                         current_list_indent_unit = None
+                        list_context_stack = []
                         next_indent = get_list_indent(next_line) if next_line.strip() else 0
                         if next_indent <= list_indent and not next_line.strip().startswith('>'):
                             # Check if we need a blank line
@@ -2012,14 +2163,17 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 else:
                     # End of file - reset for next list
                     current_list_indent_unit = None
+                    list_context_stack = []
             else:
                 # Reset cache when list ends
                 if i + 1 < len(lines):
                     next_line = lines[i + 1]
                     if next_line.strip() and not is_list_item(next_line):
                         current_list_indent_unit = None
-                else:
-                    current_list_indent_unit = None
+                        list_context_stack = []
+                    else:
+                        current_list_indent_unit = None
+                        list_context_stack = []
             i += 1
             continue
 
@@ -2052,6 +2206,10 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Regular paragraph text
         if stripped:
+            # Reset list context when we hit non-list content
+            if list_context_stack:
+                list_context_stack = []
+
             # Ensure blank line before paragraph if previous was code block or list
             if output and output[-1].strip():
                 prev = output[-1].strip()

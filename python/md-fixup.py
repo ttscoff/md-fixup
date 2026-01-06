@@ -42,6 +42,7 @@ try:
 except ImportError:
     yaml = None
 
+VERSION = "0.1.0"
 DEFAULT_WRAP_WIDTH = 60
 
 # Valid GitHub emoji names (normalized: lowercase, hyphens to underscores, sorted, deduplicated)
@@ -2591,6 +2592,7 @@ def main():
     rules_list = '\n'.join(f'  {num}. {desc[0]} ({desc[1]})' for num, desc in sorted(LINTING_RULES.items()))
     parser = argparse.ArgumentParser(
         description='Markdown linter that wraps text and ensures proper formatting',
+        prog='md-fixup',
         epilog=f'''
 Available linting rules (use with --skip):
 {rules_list}
@@ -2609,6 +2611,11 @@ Examples:
   %(prog)s --skip wrap,end-newline file.md  # Skip wrapping and end newline (using keywords)
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '-v', '--version',
+        action='version',
+        version=f'md-fixup v{VERSION}'
     )
     parser.add_argument(
         '-w', '--width',

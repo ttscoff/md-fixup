@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
+const VERSION: &str = "0.1.0";
 const DEFAULT_WRAP_WIDTH: usize = 60;
 
 // Valid GitHub emoji names (normalized: lowercase, hyphens to underscores)
@@ -2075,6 +2076,14 @@ fn main() {
 
     let matches = Command::new("md-fixup")
         .about("Markdown linter that wraps text and ensures proper formatting")
+        .disable_version_flag(true)
+        .arg(
+            Arg::new("version")
+                .short('v')
+                .long("version")
+                .help("Print version information")
+                .action(clap::ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("width")
                 .short('w')
@@ -2140,6 +2149,12 @@ Examples:
             rules_list
         ))
         .get_matches();
+
+    // Handle --version/-v flag
+    if matches.get_flag("version") {
+        println!("md-fixup v{}", VERSION);
+        std::process::exit(0);
+    }
 
     // Handle --init-config flag
     if matches.get_flag("init-config") {

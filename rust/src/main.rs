@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
-const VERSION: const VERSION: &str = "0.1.14"str = "0.1.15";
+const VERSION: &str = "0.1.16";
 const DEFAULT_WRAP_WIDTH: usize = 60;
 
 // Valid GitHub emoji names (normalized: lowercase, hyphens to underscores)

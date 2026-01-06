@@ -40,6 +40,15 @@ Table cleanup algorithm by [Dr. Drang](https://leancrew.com/).
 
 ## Installation
 
+### Homebrew
+
+Install using Homebrew:
+
+```bash
+brew tap ttscoff/thelab
+brew install md-fixup
+```
+
 ### Python Version
 
 The Python version requires Python 3 and has no external dependencies (uses only standard library).

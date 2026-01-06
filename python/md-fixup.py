@@ -2490,20 +2490,6 @@ Examples:
   %(prog)s  # Processes all .md files in current directory
   %(prog)s --skip 2,3 file.md  # Skip trailing whitespace and blank line collapse
   %(prog)s --skip wrap,end-newline file.md  # Skip wrapping and end newline (using keywords)
-
-The linter:
-  - Wraps text at specified width (preserving links, code spans, fenced blocks)
-  - Ensures blank lines before/after code blocks
-  - Ensures blank lines before/after lists (except nested)
-  - Ensures blank lines after headlines
-  - Properly indents wrapped content in lists and blockquotes
-  - Removes trailing whitespace (preserves exactly 2 spaces for line breaks)
-  - Converts list indentation spaces to tabs consistently
-  - Ensures exactly one blank line at end of file
-  - Collapses multiple blank lines (max 2 consecutive, except in code blocks)
-  - Ensures blank lines around horizontal rules
-  - Ensures exactly 1 space after # headline markers
-  - Normalizes to Unix line endings
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )

@@ -1905,6 +1905,12 @@ fn main() {
                 .help("Comma-separated list of rule numbers or keywords to skip")
         )
         .arg(
+            Arg::new("init-config")
+                .long("init-config")
+                .help("Initialize the global config file with all rules enabled by name")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("files")
                 .help("Markdown files to process")
                 .num_args(0..)
@@ -1930,6 +1936,7 @@ Examples:
   md-fixup  # Processes all .md files in current directory
   md-fixup --skip 2,3 file.md  # Skip trailing whitespace and blank line collapse
   md-fixup --skip wrap,end-newline file.md  # Skip wrapping and end newline (using keywords)
+  md-fixup --init-config  # Create initial global config file with all rules enabled
 ",
             rules_list
         ))

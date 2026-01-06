@@ -3,7 +3,7 @@
 Markdown linter that:
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
-3. Collapses multiple blank lines (max 2 consecutive, except in code blocks)
+3. Collapses multiple blank lines (max 1 consecutive, except in code blocks)
 4. Normalizes headline spacing (exactly 1 space after #)
 5. Ensures blank line after headline
 6. Ensures blank line before code block
@@ -936,7 +936,8 @@ def is_list_item(line):
 def is_headline(line):
     """Check if line is a headline (header)"""
     stripped = line.strip()
-    return bool(re.match(r'^#+\s+', stripped))
+    # Match # followed by either whitespace or content (to catch malformed headlines like #BadHeader)
+    return bool(re.match(r'^#+\s', stripped) or re.match(r'^#+[^\s#]', stripped))
 
 def is_horizontal_rule(line):
     """Check if line is a horizontal rule"""
@@ -1127,17 +1128,29 @@ def normalize_math_spacing(line, is_in_code_block=False):
     # For inline math, be very conservative - only normalize if it looks like math
     # (contains operators, letters, or is clearly mathematical)
     # Skip currency patterns like $1.50, $2, etc.
+    # Also skip if closing $ has space before it and non-space after it (not math)
     inline_math_pattern = r'\$([^\$]+?)\$'
 
     def normalize_inline_math(match):
-        content = match.group(1).strip()
-        # Only normalize if it looks like math (has operators, letters, or is clearly math)
-        # Skip if it's just digits and punctuation (likely currency)
-        if re.match(r'^[\d.,\s]+$', content):
+        content = match.group(1)
+        match_end = match.end()
+
+        # Check if closing $ has space before it and non-space after it
+        has_space_before_closing = content.endswith(' ') or content.endswith('\t')
+        has_non_space_after = (match_end < len(normalized) and
+                              not normalized[match_end].isspace())
+
+        # If closing $ has space before it AND non-space after it, skip normalization (not math)
+        if has_space_before_closing and has_non_space_after:
+            return match.group(0)  # Return original unchanged
+
+        # Otherwise, check if it looks like currency
+        trimmed_content = content.strip()
+        if re.match(r'^[\d.,\s]+$', trimmed_content):
             # Looks like currency, don't normalize
-            return '$' + match.group(1) + '$'
+            return '$' + content + '$'
         # Looks like math, normalize spacing
-        return '$' + content + '$'
+        return '$' + trimmed_content + '$'
 
     # Replace inline math (conservatively)
     normalized = re.sub(inline_math_pattern, normalize_inline_math, normalized)
@@ -1259,33 +1272,84 @@ def normalize_bold_italic(line):
     - Italics: always use * (not _)
     - Handle nested: **_text_** → __*text*__
     - Handle triple: ***text*** → __*text*__
+    - Skip inside code spans, code blocks, and emoji markers
     """
+    # First, identify protected regions (code spans, emoji markers)
+    # Code spans: `code` or ``code``
+    code_span_pattern = r'`+[^`]*`+'
+    # Emoji markers: :emoji_name:
+    emoji_pattern = r':[a-z0-9_+-]+:'
+
+    # Collect all protected regions
+    protected_ranges = []
+
+    for match in re.finditer(code_span_pattern, line):
+        protected_ranges.append((match.start(), match.end()))
+
+    for match in re.finditer(emoji_pattern, line):
+        protected_ranges.append((match.start(), match.end()))
+
+    # Sort and merge overlapping ranges
+    protected_ranges.sort()
+    merged = []
+    for start, end in protected_ranges:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    # Helper to check if a position is in a protected region
+    def is_protected(pos):
+        return any(start <= pos < end for start, end in merged)
+
+    # Helper to replace only if not in protected region
+    def replace_if_not_protected(pattern, replacement):
+        def replacer(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            return re.sub(pattern, replacement, match.group(0))
+        return replacer
+
     result = line
 
     # Handle nested cases first (most specific patterns)
+    # We need to process these manually to check protected regions
 
     # Triple asterisks: ***text*** → __*text*__
-    # Match *** followed by non-asterisk content, then ***
-    result = re.sub(r'\*\*\*([^*]+?)\*\*\*', r'__*\1*__', result)
+    def replace_triple(match):
+        if is_protected(match.start()):
+            return match.group(0)
+        return f'__*{match.group(1)}*__'
+    result = re.sub(r'\*\*\*([^*]+?)\*\*\*', replace_triple, result)
 
     # Bold-italic nested: **_text_** → __*text*__
-    # Match ** followed by _text_ then **
-    result = re.sub(r'\*\*_([^_]+?)_\*\*', r'__*\1*__', result)
+    def replace_bold_italic_nested(match):
+        if is_protected(match.start()):
+            return match.group(0)
+        return f'__*{match.group(1)}*__'
+    result = re.sub(r'\*\*_([^_]+?)_\*\*', replace_bold_italic_nested, result)
 
     # Italic-bold nested: _**text**_ → *__text__*
-    # Match _ followed by **text** then _
-    result = re.sub(r'_(\*\*[^*]+?\*\*)_', r'*\1*', result)
+    def replace_italic_bold_nested(match):
+        if is_protected(match.start()):
+            return match.group(0)
+        return f'*{match.group(1)}*'
+    result = re.sub(r'_(\*\*[^*]+?\*\*)_', replace_italic_bold_nested, result)
 
     # Now handle standalone bold and italic
     # Bold with ** → __
-    # Match **text** but avoid matching ***text*** or **_text_**
-    # Use negative lookbehind/lookahead to ensure we're not part of larger pattern
-    result = re.sub(r'(?<!\*)\*\*([^*]+?)\*\*(?!\*)', r'__\1__', result)
+    def replace_bold(match):
+        if is_protected(match.start()):
+            return match.group(0)
+        return f'__{match.group(1)}__'
+    result = re.sub(r'(?<!\*)\*\*([^*]+?)\*\*(?!\*)', replace_bold, result)
 
     # Italics with _ → *
-    # Match _text_ but avoid matching __text__ or **_text_**
-    # Use negative lookbehind/lookahead to ensure we're not part of larger pattern
-    result = re.sub(r'(?<!_)_([^_]+?)_(?!_)', r'*\1*', result)
+    def replace_italic(match):
+        if is_protected(match.start()):
+            return match.group(0)
+        return f'*{match.group(1)}*'
+    result = re.sub(r'(?<!_)_([^_]+?)_(?!_)', replace_italic, result)
 
     return result
 
@@ -1569,13 +1633,14 @@ def get_list_level(indent_str, indent_unit=2):
     total_indent = tab_count + (space_count // indent_unit)
     return total_indent
 
-def normalize_list_markers(line, list_context_stack, indent_unit=2):
+def normalize_list_markers(line, list_context_stack, indent_unit=2, skip_list_reset=False):
     """Normalize list markers based on indentation level
 
     Args:
         line: The list item line to normalize
         list_context_stack: List of (level, list_type, current_number) tuples tracking list state
         indent_unit: Base indentation unit (2 or 4 spaces per tab)
+        skip_list_reset: If True, preserve starting number; if False (default), always start at 1
 
     Returns:
         (normalized_line, updated_stack, changed)
@@ -1630,8 +1695,15 @@ def normalize_list_markers(line, list_context_stack, indent_unit=2):
     else:
         # New list at this level
         if is_numbered:
-            list_context_stack.append((current_level, 'numbered', 1))
-            new_marker = '1.'
+            # Extract starting number from marker (e.g., "7." -> 7)
+            if skip_list_reset:
+                # If list-reset is disabled, preserve the starting number
+                start_number = int(marker.rstrip('.'))
+            else:
+                # If list-reset is enabled (default), always start at 1
+                start_number = 1
+            list_context_stack.append((current_level, 'numbered', start_number))
+            new_marker = f'{start_number}.'
         else:
             list_context_stack.append((current_level, 'bulleted', None))
             # Determine bullet marker based on level
@@ -1678,9 +1750,7 @@ def should_preserve_line(line):
     # Horizontal rules
     if is_horizontal_rule(line):
         return True
-    # Empty lines
-    if not stripped:
-        return True
+    # Note: blank lines are NOT preserved here - they go through blank line compression
     return False
 
 def wrap_text(text, width, prefix=''):
@@ -1717,7 +1787,7 @@ def wrap_text(text, width, prefix=''):
 LINTING_RULES = {
     1: ("Normalize line endings to Unix", "line-endings"),
     2: ("Trim trailing whitespace (preserve exactly 2 spaces)", "trailing"),
-    3: ("Collapse multiple blank lines (max 2 consecutive)", "blank-lines"),
+    3: ("Collapse multiple blank lines (max 1 consecutive)", "blank-lines"),
     4: ("Normalize headline spacing (exactly 1 space after #)", "header-spacing"),
     5: ("Ensure blank line after headline", "header-newline"),
     6: ("Ensure blank line before code block", "code-before"),
@@ -1741,6 +1811,7 @@ LINTING_RULES = {
     24: ("Normalize typography (curly quotes, dashes, ellipses, guillemets). Sub-keywords: em-dash, guillemet", "typography"),
     25: ("Normalize bold/italic markers (bold: __, italic: *)", "bold-italic"),
     26: ("Normalize list markers (renumber ordered lists, standardize bullet markers by level)", "list-markers"),
+    27: ("Reset ordered lists to start at 1 (if disabled, preserve starting number)", "list-reset"),
 }
 
 # Create keyword to rule number mapping
@@ -2003,6 +2074,10 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Handle headlines (headers)
         if is_headline(line):
+            # Clear list context when encountering a headline (non-list element)
+            list_context_stack = []
+            current_list_indent_unit = None
+
             # Normalize headline spacing (exactly 1 space after #)
             if 4 not in skip_rules:
                 normalized = normalize_headline_spacing(line)
@@ -2026,6 +2101,10 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Handle horizontal rules
         if is_horizontal_rule(line):
+            # Clear list context when encountering a horizontal rule (non-list element)
+            list_context_stack = []
+            current_list_indent_unit = None
+
             # Ensure blank line before horizontal rule
             if 10 not in skip_rules:
                 if output and output[-1].strip():
@@ -2086,27 +2165,31 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                         prev_is_numbered = bool(re.match(r'^\d+\.', prev_marker))
 
                         # If same level and marker type changed (bullet <-> numbered): split the list
+                        # BUT only at top-level (level 0) - nested lists should just convert markers
                         if (prev_indent == list_indent_before and
                             prev_is_numbered != current_is_numbered_orig):
-                            interruption_detected = True
-                            # Remove context for this level so the new list type starts fresh
                             if current_list_indent_unit is None:
                                 current_list_indent_unit = detect_list_indent_unit(lines, i)
                             interrupt_level = get_list_level(match_current_orig.group(1), current_list_indent_unit)
-                            list_context_stack = [ctx for ctx in list_context_stack if ctx[0] != interrupt_level]
-                            # Insert: blank line, HTML comment, blank line
-                            output.append('\n')
-                            output.append('<!-- -->\n')
-                            output.append('\n')
-                            changes_made = True
+                            # Only interrupt at top-level (level 0)
+                            if interrupt_level == 0:
+                                interruption_detected = True
+                                # Remove context for this level so the new list type starts fresh
+                                list_context_stack = [ctx for ctx in list_context_stack if ctx[0] != interrupt_level]
+                                # Insert: blank line, HTML comment, blank line
+                                output.append('\n')
+                                output.append('<!-- -->\n')
+                                output.append('\n')
+                                changes_made = True
 
             # Normalize list markers (renumber ordered lists, standardize bullet markers)
             # Do this before converting spaces to tabs so level calculation works correctly
             if 26 not in skip_rules:
                 if current_list_indent_unit is None:
                     current_list_indent_unit = detect_list_indent_unit(lines, i)
+                skip_list_reset = skip_rules and 27 in skip_rules
                 normalized_line, list_context_stack, marker_changed = normalize_list_markers(
-                    line, list_context_stack, current_list_indent_unit
+                    line, list_context_stack, current_list_indent_unit, skip_list_reset
                 )
                 if marker_changed:
                     line = normalized_line
@@ -2208,6 +2291,10 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Handle blockquotes
         if is_blockquote(line):
+            # Clear list context when encountering a blockquote (non-list element)
+            list_context_stack = []
+            current_list_indent_unit = None
+
             # Normalize blockquote spacing
             if 20 not in skip_rules:
                 normalized_bq = normalize_blockquote_spacing(line)
@@ -2235,9 +2322,12 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Regular paragraph text
         if stripped:
-            # Reset list context when we hit non-list content
-            if list_context_stack:
+            # Clear list context when encountering paragraph text (non-list element)
+            # But only if this is not indented (which would be part of a list item)
+            line_indent = len(line) - len(line.lstrip())
+            if line_indent == 0 or not is_list_item(line):
                 list_context_stack = []
+                current_list_indent_unit = None
 
             # Ensure blank line before paragraph if previous was code block or list
             if output and output[-1].strip():
@@ -2266,13 +2356,13 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 output.append(line)
             consecutive_blank_lines = 0
         else:
-            # Handle blank lines - collapse multiple (max 2 consecutive, except in code blocks)
+            # Handle blank lines - collapse multiple (max 1 consecutive, except in code blocks)
             if 3 not in skip_rules:
                 consecutive_blank_lines += 1
-                if consecutive_blank_lines <= 2:
+                if consecutive_blank_lines <= 1:
                     output.append('\n')
-                # If more than 2, skip it (collapse)
-                elif consecutive_blank_lines > 2:
+                # If more than 1, skip it (collapse)
+                else:
                     changes_made = True
             else:
                 # Don't collapse, just output all blank lines
@@ -2331,11 +2421,12 @@ def get_config_path():
 
     return config_dir, config_file
 
-def init_config_file(force=False):
+def init_config_file(force=False, local=False):
     """Initialize the config file with all rules enabled by name
 
     Args:
         force: If True, create config even if it exists
+        local: If True, create .md-fixup in current directory instead of global config
 
     Returns:
         Path to created config file, or None if not created
@@ -2343,14 +2434,19 @@ def init_config_file(force=False):
     if yaml is None:
         return None
 
-    config_dir, config_file = get_config_path()
-
-    # Don't overwrite existing config unless forced
-    if config_file and not force:
-        return None
-
-    # Create config directory if it doesn't exist
-    config_dir.mkdir(parents=True, exist_ok=True)
+    if local:
+        # Local config: .md-fixup in current directory
+        config_file = Path('.md-fixup')
+        if config_file.exists() and not force:
+            return None
+    else:
+        # Global config: ~/.config/md-fixup/config.yml
+        config_dir, config_file = get_config_path()
+        if config_file and not force:
+            return None
+        # Create config directory if it doesn't exist
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / 'config.yml'
 
     # Generate config with all rules enabled
     all_rules = sorted([desc[1] for desc in LINTING_RULES.values()])
@@ -2364,8 +2460,6 @@ def init_config_file(force=False):
         }
     }
 
-    # Write to config.yml
-    config_file = config_dir / 'config.yml'
     try:
         with open(config_file, 'w', encoding='utf-8') as f:
             yaml.dump(config_content, f, default_flow_style=False, sort_keys=False)
@@ -2373,16 +2467,104 @@ def init_config_file(force=False):
     except Exception:
         return None
 
+def _parse_config_rules(config):
+    """Parse rules section from config dict
+
+    Returns:
+        set of rule numbers to skip
+    """
+    result = set()
+    if 'rules' in config and isinstance(config['rules'], dict):
+        rules_config = config['rules']
+
+        # Handle skip: all + include: [...] pattern
+        if rules_config.get('skip') == 'all':
+            # Start with all rules disabled
+            all_rule_nums = set(LINTING_RULES.keys())
+            result = all_rule_nums.copy()
+
+            # Then include the specified rules
+            if 'include' in rules_config:
+                include_list = rules_config['include']
+                if not isinstance(include_list, list):
+                    include_list = [include_list]
+
+                for item in include_list:
+                    # Handle group keywords
+                    if item == 'code-block-newlines':
+                        result.discard(6)
+                        result.discard(7)
+                    elif item == 'display-math-newlines':
+                        result.discard(21)
+                    elif item in KEYWORD_TO_RULE:
+                        result.discard(KEYWORD_TO_RULE[item])
+                    elif item.isdigit() and int(item) in LINTING_RULES:
+                        result.discard(int(item))
+
+        # Handle simple skip: [...] pattern
+        elif 'skip' in rules_config:
+            skip_list = rules_config['skip']
+            if not isinstance(skip_list, list):
+                skip_list = [skip_list]
+
+            for item in skip_list:
+                # Handle group keywords
+                if item == 'code-block-newlines':
+                    result.update({6, 7})
+                elif item == 'display-math-newlines':
+                    result.add(21)
+                elif item in KEYWORD_TO_RULE:
+                    result.add(KEYWORD_TO_RULE[item])
+                elif item.isdigit() and int(item) in LINTING_RULES:
+                    result.add(int(item))
+
+        # Handle include: [...] pattern (without skip: all)
+        if 'include' in rules_config and rules_config.get('skip') != 'all':
+            include_list = rules_config['include']
+            if not isinstance(include_list, list):
+                include_list = [include_list]
+
+            for item in include_list:
+                # Handle group keywords
+                if item == 'code-block-newlines':
+                    result.discard(6)
+                    result.discard(7)
+                elif item == 'display-math-newlines':
+                    result.discard(21)
+                elif item in KEYWORD_TO_RULE:
+                    result.discard(KEYWORD_TO_RULE[item])
+                elif item.isdigit() and int(item) in LINTING_RULES:
+                    result.discard(int(item))
+
+    return result
+
 def load_config():
-    """Load configuration from XDG_CONFIG_HOME/md-fixup/config.yml or ~/.config/md-fixup/config.yml
+    """Load configuration from .md-fixup (local) or XDG_CONFIG_HOME/md-fixup/config.yml (global)
 
     Returns:
         dict with keys: width, overwrite, skip_rules (set of rule numbers)
         Returns None if config file doesn't exist or YAML is not available
+        Local config (.md-fixup) takes precedence over global config
     """
     if yaml is None:
         return None
 
+    # Check for local config first (.md-fixup in current directory)
+    local_config = Path('.md-fixup')
+    if local_config.exists():
+        try:
+            with open(local_config, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            if config:
+                return {
+                    'width': config.get('width'),
+                    'overwrite': config.get('overwrite'),
+                    'skip_rules': _parse_config_rules(config),
+                }
+        except Exception:
+            pass  # Fall through to global config
+
+    # Fall back to global config
     config_dir, config_file = get_config_path()
 
     if not config_file:
@@ -2395,76 +2577,11 @@ def load_config():
         if not config:
             return None
 
-        result = {
+        return {
             'width': config.get('width'),
             'overwrite': config.get('overwrite'),
-            'skip_rules': set(),
+            'skip_rules': _parse_config_rules(config),
         }
-
-        # Parse rules section
-        if 'rules' in config and isinstance(config['rules'], dict):
-            rules_config = config['rules']
-
-            # Handle skip: all + include: [...] pattern
-            if rules_config.get('skip') == 'all':
-                # Start with all rules disabled
-                all_rule_nums = set(LINTING_RULES.keys())
-                result['skip_rules'] = all_rule_nums.copy()
-
-                # Then include the specified rules
-                if 'include' in rules_config:
-                    include_list = rules_config['include']
-                    if not isinstance(include_list, list):
-                        include_list = [include_list]
-
-                    for item in include_list:
-                        # Handle group keywords
-                        if item == 'code-block-newlines':
-                            result['skip_rules'].discard(6)
-                            result['skip_rules'].discard(7)
-                        elif item == 'display-math-newlines':
-                            result['skip_rules'].discard(21)
-                        elif item in KEYWORD_TO_RULE:
-                            result['skip_rules'].discard(KEYWORD_TO_RULE[item])
-                        elif item.isdigit() and int(item) in LINTING_RULES:
-                            result['skip_rules'].discard(int(item))
-
-            # Handle simple skip: [...] pattern
-            elif 'skip' in rules_config:
-                skip_list = rules_config['skip']
-                if not isinstance(skip_list, list):
-                    skip_list = [skip_list]
-
-                for item in skip_list:
-                    # Handle group keywords
-                    if item == 'code-block-newlines':
-                        result['skip_rules'].update({6, 7})
-                    elif item == 'display-math-newlines':
-                        result['skip_rules'].add(21)
-                    elif item in KEYWORD_TO_RULE:
-                        result['skip_rules'].add(KEYWORD_TO_RULE[item])
-                    elif item.isdigit() and int(item) in LINTING_RULES:
-                        result['skip_rules'].add(int(item))
-
-            # Handle include: [...] pattern (without skip: all)
-            if 'include' in rules_config and rules_config.get('skip') != 'all':
-                include_list = rules_config['include']
-                if not isinstance(include_list, list):
-                    include_list = [include_list]
-
-                for item in include_list:
-                    # Handle group keywords
-                    if item == 'code-block-newlines':
-                        result['skip_rules'].discard(6)
-                        result['skip_rules'].discard(7)
-                    elif item == 'display-math-newlines':
-                        result['skip_rules'].discard(21)
-                    elif item in KEYWORD_TO_RULE:
-                        result['skip_rules'].discard(KEYWORD_TO_RULE[item])
-                    elif item.isdigit() and int(item) in LINTING_RULES:
-                        result['skip_rules'].discard(int(item))
-
-        return result
     except Exception as e:
         # Silently ignore config file errors
         return None
@@ -2514,7 +2631,12 @@ Examples:
     parser.add_argument(
         '--init-config',
         action='store_true',
-        help='Initialize the config file with all rules enabled by name (creates ~/.config/md-fixup/config.yml)'
+        help='Initialize the global config file with all rules enabled by name (creates ~/.config/md-fixup/config.yml)'
+    )
+    parser.add_argument(
+        '--init-config-local',
+        action='store_true',
+        help='Initialize a local config file with all rules enabled by name (creates .md-fixup in current directory)'
     )
     parser.add_argument(
         'files',
@@ -2527,9 +2649,44 @@ Examples:
 
     # Handle --init-config flag
     if args.init_config:
-        config_file = init_config_file(force=True)
+        # Check if a config file already exists
+        config_dir, existing_config = get_config_path()
+        if existing_config:
+            if not sys.stdin.isatty():
+                print(f"Config file already exists at: {existing_config}", file=sys.stderr)
+                print("Refusing to overwrite config in non-interactive mode.", file=sys.stderr)
+                sys.exit(1)
+            print(f"Config file already exists at: {existing_config}", file=sys.stderr)
+            response = input("Overwrite existing config file? [y/N]: ").strip().lower()
+            if response not in ("y", "yes"):
+                print("Aborted. Existing config file left unchanged.", file=sys.stderr)
+                sys.exit(1)
+        config_file = init_config_file(force=True, local=False)
         if config_file:
             print(f"Created config file at: {config_file}", file=sys.stderr)
+            print("Edit this file to customize which rules are enabled.", file=sys.stderr)
+            sys.exit(0)
+        else:
+            print("Error: Could not create config file. Is PyYAML installed?", file=sys.stderr)
+            sys.exit(1)
+
+    # Handle --init-config-local flag
+    if args.init_config_local:
+        # Check if .md-fixup already exists
+        local_config = Path('.md-fixup')
+        if local_config.exists():
+            if not sys.stdin.isatty():
+                print(f"Config file already exists at: {local_config.absolute()}", file=sys.stderr)
+                print("Refusing to overwrite config in non-interactive mode.", file=sys.stderr)
+                sys.exit(1)
+            print(f"Config file already exists at: {local_config.absolute()}", file=sys.stderr)
+            response = input("Overwrite existing config file? [y/N]: ").strip().lower()
+            if response not in ("y", "yes"):
+                print("Aborted. Existing config file left unchanged.", file=sys.stderr)
+                sys.exit(1)
+        config_file = init_config_file(force=True, local=True)
+        if config_file:
+            print(f"Created local config file at: {config_file.absolute()}", file=sys.stderr)
             print("Edit this file to customize which rules are enabled.", file=sys.stderr)
             sys.exit(0)
         else:
@@ -2600,13 +2757,41 @@ Examples:
 
     # If no files provided as arguments, check STDIN
     if not files and not sys.stdin.isatty():
-        # Read file paths from STDIN (one per line)
-        for line in sys.stdin:
-            filepath = line.strip()
-            if filepath:
-                files.append(filepath)
+        # Read all STDIN content
+        stdin_content = sys.stdin.read()
+        stdin_lines = stdin_content.splitlines()
+
+        if stdin_lines:
+            # Check if first line looks like a file path (contains path separator or ends with .md)
+            first_line = stdin_lines[0].strip()
+            looks_like_file_path = (
+                '/' in first_line or
+                '\\' in first_line or
+                first_line.endswith('.md') or
+                Path(first_line).exists()
+            )
+
+            if looks_like_file_path:
+                # Treat as file paths (one per line)
+                for line in stdin_lines:
+                    filepath = line.strip()
+                    if filepath:
+                        files.append(filepath)
+            else:
+                # Treat as markdown content - process directly
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
+                    tmp.write(stdin_content)
+                    tmp_path = tmp.name
+
+                try:
+                    process_file(tmp_path, wrap_width, overwrite=False, skip_rules=skip_rules, skip_string=args.skip)
+                finally:
+                    os.unlink(tmp_path)
+                sys.exit(0)
+
     # If still no files, find all markdown files
-    elif not files:
+    if not files:
         root = Path('.')
         for md_file in root.rglob('*.md'):
             # Skip vendor, build, git directories

@@ -1,7 +1,7 @@
 #BadHeader
 This header has no space after the hash and no blank line after it.
 
-Here is a paragraph with trailing spaces at the end of the line.    
+Here is a paragraph with trailing spaces at the end of the line.
 And here is another line with too many consecutive blank lines after it.
 
 
@@ -78,7 +78,9 @@ Incorrect emoji names and forms:
 :octocat:
 
 Inline Attribute Lists (IALs) with bad spacing:
+
 A paragraph with a Kramdown IAL. {:.class #id}
+
 Another paragraph with Pandoc-style IAL.  { .other-class  }
 
 Display math with bad spacing and missing blank lines:
@@ -87,8 +89,19 @@ x^2 + y^2 = z^2
 $$
 Here is some text immediately following math without a blank line.
 
-Another math block without proper spacing:
-$$$x + y$$$
+This $.02 should not be converted to $5 math.
+
+This however $ x^2 $ should be fixed.
+
+```
+# None of this should be touched
+
+inline $ math $
+
+$$Display Math$$
+
+3. incorrect list item start
+```
 
 | Header 1|Header 2 | Header 3|
 |---|:---|---:|
@@ -98,11 +111,11 @@ $$$x + y$$$
 A line with Windoending marker ^M
 This line simulates CRLF endings and should be normalized.
 
-Trailing whitespace on this line.    
-Another line with trailing tabs.		
+Trailing whitespace on this line.
+Another line with trailing tabs.
 
 Paragraph before list without blank line
-1. First
+7. First
 2. Second
 
 Paragraph after code block without blank line

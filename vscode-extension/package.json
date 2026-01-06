@@ -1,0 +1,76 @@
+{
+  "name": "md-fixup",
+  "displayName": "Markdown Fixup",
+  "description": "Format markdown files using md-fixup",
+  "version": "0.1.0",
+  "publisher": "md-fixup",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "md-fixup.formatDocument",
+        "title": "Markdown Fixup: Format Document"
+      }
+    ],
+    "configuration": {
+      "title": "Markdown Fixup",
+      "properties": {
+        "md-fixup.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Markdown Fixup formatter"
+        },
+        "md-fixup.fixupOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run Markdown Fixup on save"
+        },
+        "md-fixup.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to md-fixup executable. Leave empty to use system PATH."
+        },
+        "md-fixup.width": {
+          "type": "number",
+          "default": 60,
+          "description": "Wrap width for text (0 to disable wrapping)"
+        },
+        "md-fixup.skipRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Rules to skip (e.g., ['wrap', 'end-newline'])"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "markdown",
+        "aliases": [
+          "Markdown"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0"
+  }
+}

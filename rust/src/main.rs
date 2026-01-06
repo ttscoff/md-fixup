@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead};
@@ -158,7 +158,8 @@ fn is_list_item(line: &str) -> bool {
 
 fn is_headline(line: &str) -> bool {
     let stripped = line.trim();
-    Regex::new(r"^#+\s+").unwrap().is_match(stripped)
+    // Match # followed by either whitespace or content (to catch malformed headlines like #BadHeader)
+    Regex::new(r"^#+\s").unwrap().is_match(stripped) || Regex::new(r"^#+[^\s#]").unwrap().is_match(stripped)
 }
 
 fn is_horizontal_rule(line: &str) -> bool {
@@ -304,14 +305,31 @@ fn normalize_math_spacing(line: &str, is_in_code_block: bool) -> String {
     });
 
     // Inline math: $...$ (conservative)
+    // Skip if closing $ has space before it and non-space after it (likely not math, e.g., currency)
     let inline_math_re = Regex::new(r"\$([^\$]+?)\$").unwrap();
-    let result = inline_math_re.replace_all(&result, |caps: &regex::Captures| {
-        let content = caps.get(1).unwrap().as_str().trim();
+    let result_str = result.to_string(); // Convert to owned string for checking
+    let result = inline_math_re.replace_all(&result_str, |caps: &regex::Captures| {
+        let full_match = caps.get(0).unwrap();
+        let content = caps.get(1).unwrap().as_str();
+        let match_end = full_match.end();
+
+        // Check if closing $ has space before it and non-space after it
+        let has_space_before_closing = content.ends_with(' ') || content.ends_with('\t');
+        let has_non_space_after = match_end < result_str.len() &&
+            !result_str.chars().nth(match_end).map(|c| c.is_whitespace()).unwrap_or(true);
+
+        // If closing $ has space before it AND non-space after it, skip normalization (not math)
+        if has_space_before_closing && has_non_space_after {
+            return full_match.as_str().to_string();
+        }
+
+        // Otherwise, check if it looks like currency
+        let trimmed_content = content.trim();
         let currency_re = Regex::new(r"^[\d.,\s]+$").unwrap();
-        if currency_re.is_match(content) {
-            format!("${}$", caps.get(1).unwrap().as_str())
-        } else {
+        if currency_re.is_match(trimmed_content) {
             format!("${}$", content)
+        } else {
+            format!("${}$", trimmed_content)
         }
     });
 
@@ -420,19 +438,102 @@ fn normalize_typography(line: &str, skip_em_dash: bool, skip_guillemet: bool) ->
 }
 
 fn normalize_bold_italic(line: &str) -> String {
+    // First, identify protected regions (code spans, emoji markers) in the ORIGINAL line
+    // Code spans: `code` or ``code``
+    let code_span_re = Regex::new(r"`+[^`]*`+").unwrap();
+    // Emoji markers: :emoji_name: (case-insensitive, allows underscores, hyphens, plus signs)
+    let emoji_re = Regex::new(r"(?i):[a-z0-9_+-]+:").unwrap();
+
+    // Collect all protected regions from the original line
+    let mut protected_ranges: Vec<(usize, usize)> = Vec::new();
+
+    for mat in code_span_re.find_iter(line) {
+        protected_ranges.push((mat.start(), mat.end()));
+    }
+
+    for mat in emoji_re.find_iter(line) {
+        protected_ranges.push((mat.start(), mat.end()));
+    }
+
+    // Sort and merge overlapping ranges
+    protected_ranges.sort_by_key(|r| r.0);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in protected_ranges {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        } else {
+            merged.push((start, end));
+        }
+    }
+
+    // Helper to check if a position is in a protected region
+    let is_protected = |pos: usize| -> bool {
+        merged.iter().any(|(start, end)| pos >= *start && pos < *end)
+    };
+
     let mut result = line.to_string();
 
     // Triple asterisks: ***text*** → __*text*__
     let re1 = Regex::new(r"\*\*\*([^*]+?)\*\*\*").unwrap();
-    result = re1.replace_all(&result, r"__*$1*__").to_string();
+    result = re1.replace_all(&result, |caps: &regex::Captures| {
+        let full_match = caps.get(0).unwrap();
+        if is_protected(full_match.start()) {
+            full_match.as_str().to_string()
+        } else {
+            format!("__*{}*__", &caps[1])
+        }
+    }).to_string();
 
     // Bold-italic nested: **_text_** → __*text*__
     let re2 = Regex::new(r"\*\*_([^_]+?)_\*\*").unwrap();
-    result = re2.replace_all(&result, r"__*$1*__").to_string();
+    result = re2.replace_all(&result, |caps: &regex::Captures| {
+        let full_match = caps.get(0).unwrap();
+        if is_protected(full_match.start()) {
+            full_match.as_str().to_string()
+        } else {
+            format!("__*{}*__", &caps[1])
+        }
+    }).to_string();
 
     // Italic-bold nested: _**text**_ → *__text__*
     let re3 = Regex::new(r"_(\*\*[^*]+?\*\*)_").unwrap();
-    result = re3.replace_all(&result, r"*$1*").to_string();
+    result = re3.replace_all(&result, |caps: &regex::Captures| {
+        let full_match = caps.get(0).unwrap();
+        if is_protected(full_match.start()) {
+            full_match.as_str().to_string()
+        } else {
+            format!("*{}*", &caps[1])
+        }
+    }).to_string();
+
+    // Rebuild protected regions from current result (positions may have shifted)
+    let mut protected_ranges_result: Vec<(usize, usize)> = Vec::new();
+    for mat in code_span_re.find_iter(&result) {
+        protected_ranges_result.push((mat.start(), mat.end()));
+    }
+    for mat in emoji_re.find_iter(&result) {
+        protected_ranges_result.push((mat.start(), mat.end()));
+    }
+    protected_ranges_result.sort_by_key(|r| r.0);
+    let mut merged_result: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in protected_ranges_result {
+        if let Some(last) = merged_result.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+            } else {
+                merged_result.push((start, end));
+            }
+        } else {
+            merged_result.push((start, end));
+        }
+    }
+    let is_protected_result = |pos: usize| -> bool {
+        merged_result.iter().any(|(start, end)| pos >= *start && pos < *end)
+    };
 
     // Bold with ** → __ (avoid matching *** or **_)
     // Since Rust regex doesn't support lookbehind/lookahead, we'll manually check context
@@ -449,23 +550,54 @@ fn normalize_bold_italic(line: &str) -> String {
         // Add text before match
         new_result.push_str(&result[last_end..start]);
 
-        // Check context using byte indices: not preceded by * and not followed by *
-        let preceded_by_star = start > 0 && result_bytes[start - 1] == b'*';
-        let followed_by_star = end < result_bytes.len() && result_bytes[end] == b'*';
-
-        if preceded_by_star || followed_by_star {
+        // Check if in protected region
+        if is_protected_result(start) {
             // Keep original
             new_result.push_str(full_match.as_str());
         } else {
-            // Replace **text** with __text__
-            let content = cap.get(2).unwrap().as_str();
-            new_result.push_str(&format!("__{}__", content));
+            // Check context using byte indices: not preceded by * and not followed by *
+            let preceded_by_star = start > 0 && result_bytes[start - 1] == b'*';
+            let followed_by_star = end < result_bytes.len() && result_bytes[end] == b'*';
+
+            if preceded_by_star || followed_by_star {
+                // Keep original
+                new_result.push_str(full_match.as_str());
+            } else {
+                // Replace **text** with __text__
+                let content = cap.get(2).unwrap().as_str();
+                new_result.push_str(&format!("__{}__", content));
+            }
         }
 
         last_end = end;
     }
     new_result.push_str(&result[last_end..]);
     result = new_result;
+
+    // Rebuild protected regions again for italic check
+    let mut protected_ranges_result2: Vec<(usize, usize)> = Vec::new();
+    for mat in code_span_re.find_iter(&result) {
+        protected_ranges_result2.push((mat.start(), mat.end()));
+    }
+    for mat in emoji_re.find_iter(&result) {
+        protected_ranges_result2.push((mat.start(), mat.end()));
+    }
+    protected_ranges_result2.sort_by_key(|r| r.0);
+    let mut merged_result2: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in protected_ranges_result2 {
+        if let Some(last) = merged_result2.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+            } else {
+                merged_result2.push((start, end));
+            }
+        } else {
+            merged_result2.push((start, end));
+        }
+    }
+    let is_protected_result2 = |pos: usize| -> bool {
+        merged_result2.iter().any(|(start, end)| pos >= *start && pos < *end)
+    };
 
     // Italics with _ → * (avoid matching __ or **_)
     let re5 = Regex::new(r"(_)([^_]+?)(_)").unwrap();
@@ -481,17 +613,23 @@ fn normalize_bold_italic(line: &str) -> String {
         // Add text before match
         new_result.push_str(&result[last_end..start]);
 
-        // Check context using byte indices: not preceded by _ and not followed by _
-        let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
-        let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
-
-        if preceded_by_underscore || followed_by_underscore {
+        // Check if in protected region
+        if is_protected_result2(start) {
             // Keep original
             new_result.push_str(full_match.as_str());
         } else {
-            // Replace _text_ with *text*
-            let content = cap.get(2).unwrap().as_str();
-            new_result.push_str(&format!("*{}*", content));
+            // Check context using byte indices: not preceded by _ and not followed by _
+            let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
+            let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
+
+            if preceded_by_underscore || followed_by_underscore {
+                // Keep original
+                new_result.push_str(full_match.as_str());
+            } else {
+                // Replace _text_ with *text*
+                let content = cap.get(2).unwrap().as_str();
+                new_result.push_str(&format!("*{}*", content));
+            }
         }
 
         last_end = end;
@@ -817,6 +955,7 @@ fn normalize_list_markers(
     line: &str,
     list_context_stack: &mut Vec<ListContext>,
     indent_unit: usize,
+    skip_list_reset: bool,
 ) -> (String, bool) {
     if !is_list_item(line) {
         return (line.to_string(), false);
@@ -865,12 +1004,20 @@ fn normalize_list_markers(
     } else {
         // New list at this level
         if is_numbered {
+            // Extract starting number from marker (e.g., "7." -> 7)
+            let start_number = if skip_list_reset {
+                // If list-reset is disabled, preserve the starting number
+                marker.trim_end_matches('.').parse::<usize>().unwrap_or(1)
+            } else {
+                // If list-reset is enabled (default), always start at 1
+                1
+            };
             list_context_stack.push(ListContext {
                 level: current_level,
                 list_type: ListType::Numbered,
-                current_number: Some(1),
+                current_number: Some(start_number),
             });
-            "1.".to_string()
+            format!("{}.", start_number)
         } else {
             list_context_stack.push(ListContext {
                 level: current_level,
@@ -920,7 +1067,7 @@ fn should_preserve_line(line: &str) -> bool {
         || stripped.starts_with('#')
         || is_horizontal_rule(line)
         || stripped.contains('|')  // Tables should not be wrapped
-        || stripped.is_empty()
+        // Note: blank lines are NOT preserved here - they go through blank line compression
 }
 
 fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
@@ -976,7 +1123,7 @@ struct LintingRule {
 const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 1, description: "Normalize line endings to Unix", keyword: "line-endings" },
     LintingRule { num: 2, description: "Trim trailing whitespace (preserve exactly 2 spaces)", keyword: "trailing" },
-    LintingRule { num: 3, description: "Collapse multiple blank lines (max 2 consecutive)", keyword: "blank-lines" },
+    LintingRule { num: 3, description: "Collapse multiple blank lines (max 1 consecutive)", keyword: "blank-lines" },
     LintingRule { num: 4, description: "Normalize headline spacing (exactly 1 space after #)", keyword: "header-spacing" },
     LintingRule { num: 5, description: "Ensure blank line after headline", keyword: "header-newline" },
     LintingRule { num: 6, description: "Ensure blank line before code block", keyword: "code-before" },
@@ -1000,6 +1147,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 24, description: "Normalize typography (curly quotes, dashes, ellipses, guillemets). Sub-keywords: em-dash, guillemet", keyword: "typography" },
     LintingRule { num: 25, description: "Normalize bold/italic markers (bold: __, italic: *)", keyword: "bold-italic" },
     LintingRule { num: 26, description: "Normalize list markers (renumber ordered lists, standardize bullet markers by level)", keyword: "list-markers" },
+    LintingRule { num: 27, description: "Reset ordered lists to start at 1 (if disabled, preserve starting number)", keyword: "list-reset" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -1091,16 +1239,25 @@ fn get_config_path() -> (PathBuf, Option<PathBuf>) {
     (config_dir, config_file)
 }
 
-fn init_config_file(force: bool) -> Option<PathBuf> {
-    let (config_dir, existing_file) = get_config_path();
+fn init_config_file(force: bool, local: bool) -> Option<PathBuf> {
+    let config_file = if local {
+        // Local config: .md-fixup in current directory
+        PathBuf::from(".md-fixup")
+    } else {
+        // Global config: ~/.config/md-fixup/config.yml
+        let (config_dir, existing_file) = get_config_path();
+        if existing_file.is_some() && !force {
+            return None;
+        }
+        // Create config directory if it doesn't exist
+        if fs::create_dir_all(&config_dir).is_err() {
+            return None;
+        }
+        config_dir.join("config.yml")
+    };
 
-    // Don't overwrite existing config unless forced
-    if existing_file.is_some() && !force {
-        return None;
-    }
-
-    // Create config directory if it doesn't exist
-    if fs::create_dir_all(&config_dir).is_err() {
+    // Don't overwrite existing local config unless forced
+    if local && config_file.exists() && !force {
         return None;
     }
 
@@ -1119,15 +1276,23 @@ fn init_config_file(force: bool) -> Option<PathBuf> {
         yaml_content.push_str(&format!("    - {}\n", rule));
     }
 
-    // Write to config.yml
-    let config_file = config_dir.join("config.yml");
     fs::write(&config_file, yaml_content).ok()?;
     Some(config_file)
 }
 
 fn load_config() -> Option<Config> {
-    let (_config_dir, config_file) = get_config_path();
+    // Check for local config first (.md-fixup in current directory)
+    let local_config = PathBuf::from(".md-fixup");
+    if local_config.exists() {
+        if let Ok(content) = fs::read_to_string(&local_config) {
+            if let Ok(config) = serde_yaml::from_str(&content) {
+                return Some(config);
+            }
+        }
+    }
 
+    // Fall back to global config
+    let (_config_dir, config_file) = get_config_path();
     let config_file = config_file?;
     let content = fs::read_to_string(config_file).ok()?;
     serde_yaml::from_str(&content).ok()
@@ -1476,6 +1641,10 @@ fn process_file(
 
         // Handle headlines
         if is_headline(&line) {
+            // Clear list context when encountering a headline (non-list element)
+            list_context_stack.clear();
+            current_list_indent_unit = None;
+
             if !skip_rules.contains(&4) {
                 let normalized = normalize_headline_spacing(&line);
                 if normalized != line {
@@ -1508,6 +1677,10 @@ fn process_file(
 
         // Handle horizontal rules
         if is_horizontal_rule(&line) {
+            // Clear list context when encountering a horizontal rule (non-list element)
+            list_context_stack.clear();
+            current_list_indent_unit = None;
+
             if !skip_rules.contains(&10) {
                 if !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
                     output.push("\n".to_string());
@@ -1584,7 +1757,8 @@ fn process_file(
                             let current_level = get_list_level(current_indent_str, indent_unit);
 
                             // If same level and marker type changed (bullet <-> numbered): split the list
-                            if prev_level == current_level && prev_is_numbered != current_is_numbered_orig {
+                            // BUT only at top-level (level 0) - nested lists should just convert markers
+                            if prev_level == current_level && prev_is_numbered != current_is_numbered_orig && current_level == 0 {
                                 // Remove context for this level so the new list type starts fresh
                                 let interrupt_level = current_level;
                                 list_context_stack.retain(|ctx| ctx.level != interrupt_level);
@@ -1603,7 +1777,13 @@ fn process_file(
             // Do this before converting spaces to tabs so level calculation works correctly
             if !skip_rules.contains(&26) {
                 let indent_unit = current_list_indent_unit.unwrap_or_else(|| detect_list_indent_unit(&lines, i));
-                let (normalized_line, marker_changed) = normalize_list_markers(&line, &mut list_context_stack, indent_unit);
+
+                // Don't clear list context on blank lines - blank lines are allowed within lists in CommonMark
+                // Only clear if the next non-blank line after a blank line is NOT a list item or is at a different level
+                // This is handled when we encounter non-list elements (paragraphs, headings, etc.)
+
+                let skip_list_reset = skip_rules.contains(&27);
+                let (normalized_line, marker_changed) = normalize_list_markers(&line, &mut list_context_stack, indent_unit, skip_list_reset);
                 // Always use normalized_line to ensure context stack is updated correctly
                 line = normalized_line;
                 if marker_changed {
@@ -1727,6 +1907,10 @@ fn process_file(
 
         // Handle blockquotes
         if is_blockquote(&line) {
+            // Clear list context when encountering a blockquote (non-list element)
+            list_context_stack.clear();
+            current_list_indent_unit = None;
+
             if !skip_rules.contains(&20) {
                 let normalized_bq = normalize_blockquote_spacing(&line);
                 if normalized_bq != line {
@@ -1763,6 +1947,14 @@ fn process_file(
 
         // Regular paragraph text
         if !stripped.is_empty() {
+            // Clear list context when encountering paragraph text (non-list element)
+            // But only if this is not indented (which would be part of a list item)
+            let line_indent = line.len() - line.trim_start().len();
+            if line_indent == 0 || !is_list_item(&line) {
+                list_context_stack.clear();
+                current_list_indent_unit = None;
+            }
+
             if !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
                 let prev = output[output.len() - 1].trim();
                 if prev.starts_with("```") || is_list_item(&output[output.len() - 1]) {
@@ -1796,12 +1988,13 @@ fn process_file(
 
             consecutive_blank_lines = 0;
         } else {
-            // Handle blank lines
+            // Handle blank lines - collapse multiple (max 1 consecutive, except in code blocks)
             if !skip_rules.contains(&3) {
                 consecutive_blank_lines += 1;
-                if consecutive_blank_lines <= 2 {
+                if consecutive_blank_lines <= 1 {
                     output.push("\n".to_string());
                 } else {
+                    // More than 1 consecutive blank line - skip it (collapse)
                     changes_made = true;
                 }
             } else {
@@ -1911,6 +2104,12 @@ fn main() {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("init-config-local")
+                .long("init-config-local")
+                .help("Initialize a local config file with all rules enabled by name (creates .md-fixup in current directory)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("files")
                 .help("Markdown files to process")
                 .num_args(0..)
@@ -1944,9 +2143,68 @@ Examples:
 
     // Handle --init-config flag
     if matches.get_flag("init-config") {
-        match init_config_file(true) {
+        let (_config_dir, existing_config) = get_config_path();
+        if let Some(existing) = existing_config {
+            if !atty::is(atty::Stream::Stdin) {
+                eprintln!("Config file already exists at: {}", existing.display());
+                eprintln!("Refusing to overwrite config in non-interactive mode.");
+                std::process::exit(1);
+            }
+            eprintln!("Config file already exists at: {}", existing.display());
+            eprint!("Overwrite existing config file? [y/N]: ");
+            use std::io::Write;
+            io::stderr().flush().ok();
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                eprintln!("Failed to read input. Aborting.");
+                std::process::exit(1);
+            }
+            let resp = input.trim().to_lowercase();
+            if resp != "y" && resp != "yes" {
+                eprintln!("Aborted. Existing config file left unchanged.");
+                std::process::exit(1);
+            }
+        }
+        match init_config_file(true, false) {
             Some(config_file) => {
                 eprintln!("Created config file at: {}", config_file.display());
+                eprintln!("Edit this file to customize which rules are enabled.");
+                std::process::exit(0);
+            }
+            None => {
+                eprintln!("Error: Could not create config file.");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Handle --init-config-local flag
+    if matches.get_flag("init-config-local") {
+        let local_config = PathBuf::from(".md-fixup");
+        if local_config.exists() {
+            if !atty::is(atty::Stream::Stdin) {
+                eprintln!("Config file already exists at: {}", local_config.canonicalize().unwrap_or(local_config.clone()).display());
+                eprintln!("Refusing to overwrite config in non-interactive mode.");
+                std::process::exit(1);
+            }
+            eprintln!("Config file already exists at: {}", local_config.canonicalize().unwrap_or(local_config.clone()).display());
+            eprint!("Overwrite existing config file? [y/N]: ");
+            use std::io::Write;
+            io::stderr().flush().ok();
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                eprintln!("Failed to read input. Aborting.");
+                std::process::exit(1);
+            }
+            let resp = input.trim().to_lowercase();
+            if resp != "y" && resp != "yes" {
+                eprintln!("Aborted. Existing config file left unchanged.");
+                std::process::exit(1);
+            }
+        }
+        match init_config_file(true, true) {
+            Some(config_file) => {
+                eprintln!("Created local config file at: {}", config_file.canonicalize().unwrap_or(config_file.clone()).display());
                 eprintln!("Edit this file to customize which rules are enabled.");
                 std::process::exit(0);
             }
@@ -1960,7 +2218,7 @@ Examples:
     // Auto-init config if it doesn't exist and running interactively
     let (_config_dir, config_file) = get_config_path();
     if config_file.is_none() && atty::is(atty::Stream::Stdout) {
-        if let Some(config_file) = init_config_file(false) {
+        if let Some(config_file) = init_config_file(false, false) {
             eprintln!("Created initial config file at: {}", config_file.display());
             eprintln!("Edit this file to customize which rules are enabled.");
         }
@@ -2012,18 +2270,77 @@ Examples:
         let stdin = io::stdin();
         let mut stdin_lines = stdin.lock().lines();
 
-        // Try to read from STDIN (non-blocking check)
+        // Read all STDIN content
+        let mut stdin_content = String::new();
+        let mut stdin_lines_vec = Vec::new();
         let mut has_stdin = false;
         while let Some(Ok(line)) = stdin_lines.next() {
-            let filepath = line.trim();
-            if !filepath.is_empty() {
-                files.push(filepath.to_string());
-                has_stdin = true;
+            stdin_content.push_str(&line);
+            stdin_content.push('\n');
+            stdin_lines_vec.push(line.clone());
+            has_stdin = true;
+        }
+
+        if has_stdin && !stdin_lines_vec.is_empty() {
+            // Check if first line looks like a file path
+            let first_line = stdin_lines_vec[0].trim();
+            let looks_like_file_path = first_line.contains('/')
+                || first_line.contains('\\')
+                || first_line.ends_with(".md")
+                || Path::new(first_line).exists();
+
+            if looks_like_file_path {
+                // Treat as file paths (one per line)
+                for line in stdin_lines_vec {
+                    let filepath = line.trim();
+                    if !filepath.is_empty() {
+                        files.push(filepath.to_string());
+                    }
+                }
+            } else {
+                // Treat as markdown content - process directly
+                use tempfile::NamedTempFile;
+                use std::io::Write;
+
+                let mut tmp = match NamedTempFile::new() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("Error creating temporary file: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+
+                if let Err(e) = tmp.write_all(stdin_content.as_bytes()) {
+                    eprintln!("Error writing to temporary file: {}", e);
+                    std::process::exit(1);
+                }
+
+                // Flush to ensure all data is written
+                if let Err(e) = tmp.flush() {
+                    eprintln!("Error flushing temporary file: {}", e);
+                    std::process::exit(1);
+                }
+
+                // Convert to TempPath so file persists after dropping the handle
+                let tmp_path_obj = tmp.into_temp_path();
+                let tmp_path = tmp_path_obj.to_string_lossy().to_string();
+
+                match process_file(&tmp_path, wrap_width, false, &skip_rules, skip_em_dash, skip_guillemet) {
+                    Ok(_) => {
+                        // process_file already printed to stdout when overwrite=false
+                        // tmp_path_obj will be automatically deleted when dropped
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("Error processing STDIN: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
         }
 
         // If no STDIN input, find all markdown files
-        if !has_stdin {
+        if files.is_empty() {
             files = find_markdown_files();
         }
     }

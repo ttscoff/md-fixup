@@ -6,11 +6,11 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 25 different normalization and formatting rules:
+md-fixup performs 27 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
-3. Collapses multiple blank lines (max 2 consecutive, except in code blocks)
+3. Collapses multiple blank lines (max 1 consecutive, except in code blocks)
 4. Normalizes headline spacing (exactly 1 space after #)
 5. Ensures blank line after headline
 6. Ensures blank line before code block
@@ -33,6 +33,8 @@ md-fixup performs 25 different normalization and formatting rules:
 23. Normalizes emoji names (spellcheck and correct typos using fuzzy matching)
 24. Normalizes typography (curly quotes to straight, en/em dashes, ellipses, guillemets)
 25. Normalizes bold/italic markers (bold: always __, italic: always *)
+26. Normalizes list markers (renumber ordered lists, standardize bullet markers by level)
+27. Resets ordered lists to start at 1 (if disabled, preserves starting number)
 
 Table cleanup algorithm by [Dr. Drang](https://leancrew.com/).
 
@@ -127,6 +129,7 @@ Rules can be skipped using either their number or keyword:
 - `24` / `typography` - Normalize typography (sub-keywords: `em-dash`, `guillemet`)
 - `25` / `bold-italic` - Normalize bold/italic markers
 - `26` / `list-markers` - Normalize list markers (renumber ordered lists, standardize bullet markers by level)
+- `27` / `list-reset` - Reset ordered lists to start at 1 (if disabled, preserves starting number)
 
 Group keywords (expand to multiple rules):
 

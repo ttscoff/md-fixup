@@ -3,13 +3,15 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build:
     name: Build and Release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
@@ -28,15 +30,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Diagnostic information
+        run: |
+          echo "=== System Information ==="
+          uname -a
+          echo "=== Disk Space ==="
+          df -h
+          echo "=== Memory ==="
+          free -h || vm_stat || echo "Memory info not available"
+          echo "=== Environment ==="
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "Matrix OS: ${{ matrix.os }}"
+          echo "Matrix Target: ${{ matrix.target }}"
+          echo "=== Working Directory ==="
+          pwd
+          ls -la
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install cross-compilation toolchain (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Configure Cargo for cross-compilation (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        working-directory: rust
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          ar = "aarch64-linux-gnu-ar"
+          EOF
+
+      - name: Clean build directory (Linux ARM only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        working-directory: rust
+        run: cargo clean --target aarch64-unknown-linux-gnu
+
       - name: Build release binary
         working-directory: rust
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          echo "Building for target: ${{ matrix.target }}"
+          echo "OS: ${{ matrix.os }}"
+          echo "Rust version:"
+          rustc --version
+          echo "Cargo version:"
+          cargo --version
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+            export RUSTFLAGS="-C linker=aarch64-linux-gnu-gcc"
+            echo "Cross-compilation environment variables set"
+            aarch64-linux-gnu-gcc --version || echo "WARNING: aarch64-linux-gnu-gcc not found"
+          fi
+          echo "Starting cargo build..."
+          echo "Current directory: $(pwd)"
+          echo "Target directory exists: $(test -d target && echo 'yes' || echo 'no')"
+          set -x
+          cargo build --release --target ${{ matrix.target }} || {
+            echo "Build failed with exit code: $?"
+            echo "Last 50 lines of cargo output:"
+            tail -50
+            exit 1
+          }
+          set +x
 
       - name: Create release archive
         shell: bash

@@ -8,17 +8,25 @@
 class MdFixup < Formula
   desc "Markdown linter that normalizes formatting and wraps text"
   homepage "https://github.com/yourusername/md-fixup"
-  url "https://github.com/yourusername/md-fixup/archive/v0.1.0.tar.gz"
-  sha256 "calculated-sha256-here"
   license "MIT"
   head "https://github.com/yourusername/md-fixup.git", branch: "main"
 
-  depends_on "rust" => :build
+  # Binary distribution (faster installation)
+  if OS.mac?
+    if Hardware::CPU.intel?
+      url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-x86_64-apple-darwin.tar.gz"
+      sha256 "x86_64-apple-darwin-sha256-here"
+    else
+      url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-aarch64-apple-darwin.tar.gz"
+      sha256 "aarch64-apple-darwin-sha256-here"
+    end
+  else
+    url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-x86_64-unknown-linux-gnu.tar.gz"
+    sha256 "x86_64-unknown-linux-gnu-sha256-here"
+  end
 
   def install
-    cd "rust" do
-      system "cargo", "install", "--path", ".", "--root", prefix, "--locked"
-    end
+    bin.install "md-fixup"
   end
 
   test do

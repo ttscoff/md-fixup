@@ -54,5 +54,4 @@ jobs:
 
       - name: Run Python tests
         run: |
-          cd python && python3 -m unittest test_md_fixup -v
-          cd python && python3 -m unittest test_table_wrapping -v
+          python3 -m unittest discover -s python -p 'test_*.py' -v

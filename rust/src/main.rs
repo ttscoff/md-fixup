@@ -1,9 +1,10 @@
 use clap::{Arg, Command};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_WRAP_WIDTH: usize = 60;
 
@@ -1009,6 +1010,19 @@ fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String>
     let values: Vec<&str> = skip_str.split(',').map(|s| s.trim()).collect();
 
     for value in values {
+        // Group keywords that map to multiple underlying rules
+        if value == "code-block-newlines" {
+            // Skip both before/after code block rules
+            skip_rules.insert(6);
+            skip_rules.insert(7);
+            continue;
+        }
+        if value == "display-math-newlines" {
+            // Skip display math block spacing and surrounding newlines
+            skip_rules.insert(21);
+            continue;
+        }
+
         if value == "em-dash" {
             skip_em_dash = true;
             continue;
@@ -1024,16 +1038,168 @@ fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String>
             } else {
                 return Err(format!("Invalid rule number: {}", rule_num));
             }
+        } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == value) {
+            skip_rules.insert(rule.num);
         } else {
-            if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == value) {
-                skip_rules.insert(rule.num);
-            } else {
-                return Err(format!("Invalid keyword: {}", value));
-            }
+            return Err(format!("Invalid keyword: {}", value));
         }
     }
 
     Ok((skip_rules, skip_em_dash, skip_guillemet))
+}
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    width: Option<usize>,
+    overwrite: Option<bool>,
+    rules: Option<RulesConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RulesConfig {
+    skip: Option<RulesList>,
+    include: Option<RulesList>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RulesList {
+    All,
+    List(Vec<String>),
+}
+
+fn get_config_path() -> (PathBuf, Option<PathBuf>) {
+    // Determine config directory
+    let config_dir = if let Some(xdg_config) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg_config)
+    } else {
+        let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.push(".config");
+        home
+    };
+    let config_dir = config_dir.join("md-fixup");
+
+    // Try config.yml first, then config.yaml
+    let config_file = if config_dir.join("config.yml").exists() {
+        Some(config_dir.join("config.yml"))
+    } else if config_dir.join("config.yaml").exists() {
+        Some(config_dir.join("config.yaml"))
+    } else {
+        None
+    };
+
+    (config_dir, config_file)
+}
+
+fn init_config_file(force: bool) -> Option<PathBuf> {
+    let (config_dir, existing_file) = get_config_path();
+
+    // Don't overwrite existing config unless forced
+    if existing_file.is_some() && !force {
+        return None;
+    }
+
+    // Create config directory if it doesn't exist
+    if fs::create_dir_all(&config_dir).is_err() {
+        return None;
+    }
+
+    // Generate config with all rules enabled
+    let all_rules: Vec<String> = LINTING_RULES.iter()
+        .map(|r| r.keyword.to_string())
+        .collect();
+
+    // Build YAML content manually (simpler than using serde_yaml::Value)
+    let mut yaml_content = format!("width: {}\n", DEFAULT_WRAP_WIDTH);
+    yaml_content.push_str("overwrite: false\n");
+    yaml_content.push_str("rules:\n");
+    yaml_content.push_str("  skip: all\n");
+    yaml_content.push_str("  include:\n");
+    for rule in all_rules {
+        yaml_content.push_str(&format!("    - {}\n", rule));
+    }
+
+    // Write to config.yml
+    let config_file = config_dir.join("config.yml");
+    fs::write(&config_file, yaml_content).ok()?;
+    Some(config_file)
+}
+
+fn load_config() -> Option<Config> {
+    let (_config_dir, config_file) = get_config_path();
+
+    let config_file = config_file?;
+    let content = fs::read_to_string(config_file).ok()?;
+    serde_yaml::from_str(&content).ok()
+}
+
+fn parse_config_rules(config: &Config) -> HashSet<u8> {
+    let mut skip_rules = HashSet::new();
+
+    if let Some(rules_config) = &config.rules {
+        // Handle skip: all + include: [...] pattern
+        if let Some(RulesList::All) = rules_config.skip.as_ref() {
+            // Start with all rules disabled
+            skip_rules = LINTING_RULES.iter().map(|r| r.num).collect();
+
+            // Then include the specified rules
+            if let Some(RulesList::List(include_list)) = &rules_config.include {
+                for item in include_list {
+                    if item == "code-block-newlines" {
+                        skip_rules.remove(&6);
+                        skip_rules.remove(&7);
+                    } else if item == "display-math-newlines" {
+                        skip_rules.remove(&21);
+                    } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                        skip_rules.remove(&rule.num);
+                    } else if let Ok(rule_num) = item.parse::<u8>() {
+                        if LINTING_RULES.iter().any(|r| r.num == rule_num) {
+                            skip_rules.remove(&rule_num);
+                        }
+                    }
+                }
+            }
+        }
+        // Handle simple skip: [...] pattern
+        else if let Some(RulesList::List(skip_list)) = &rules_config.skip {
+            for item in skip_list {
+                if item == "code-block-newlines" {
+                    skip_rules.insert(6);
+                    skip_rules.insert(7);
+                } else if item == "display-math-newlines" {
+                    skip_rules.insert(21);
+                } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                    skip_rules.insert(rule.num);
+                } else if let Ok(rule_num) = item.parse::<u8>() {
+                    if LINTING_RULES.iter().any(|r| r.num == rule_num) {
+                        skip_rules.insert(rule_num);
+                    }
+                }
+            }
+        }
+
+        // Handle include: [...] pattern (without skip: all)
+        if let Some(RulesList::List(include_list)) = &rules_config.include {
+            if !matches!(rules_config.skip, Some(RulesList::All)) {
+                for item in include_list {
+                    if item == "code-block-newlines" {
+                        skip_rules.remove(&6);
+                        skip_rules.remove(&7);
+                    } else if item == "display-math-newlines" {
+                        skip_rules.remove(&21);
+                    } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                        skip_rules.remove(&rule.num);
+                    } else if let Ok(rule_num) = item.parse::<u8>() {
+                        if LINTING_RULES.iter().any(|r| r.num == rule_num) {
+                            skip_rules.remove(&rule_num);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    skip_rules
 }
 
 fn process_file(
@@ -1085,14 +1251,35 @@ fn process_file(
                 }
             }
 
+            // Determine if this is the opening or closing fence before toggling
+            let is_opening = !in_code_block;
             in_code_block = !in_code_block;
 
-            if !skip_rules.contains(&6) {
-                if !in_code_block && !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
-                    let last = output[output.len() - 1].trim();
-                    if !last.starts_with("```") {
-                        output.push("\n".to_string());
+            // Ensure blank line before code block (unless at start)
+            if !skip_rules.contains(&6) && is_opening {
+                if let Some(last_line) = output.last() {
+                    if !last_line.trim().is_empty() {
+                        let last = last_line.trim();
+                        if !last.starts_with("```") {
+                            output.push("\n".to_string());
+                            changes_made = true;
+                        }
+                    }
+                }
+            }
+
+            // If this is the closing fence, remove trailing blank lines inside the code block
+            if !is_opening {
+                while let Some(last_line) = output.last() {
+                    if last_line.trim().is_empty() {
+                        // Do not remove the opening fence if the block was empty
+                        if last_line.trim().starts_with("```") {
+                            break;
+                        }
+                        output.pop();
                         changes_made = true;
+                    } else {
+                        break;
                     }
                 }
             }
@@ -1173,15 +1360,30 @@ fn process_file(
                 in_math_block = !in_math_block;
 
                 if is_opening {
-                    output.push("$$".to_string());
-                    output.push("\n".to_string());
-                } else {
-                    if !output.is_empty() && output[output.len() - 1].trim_end().ends_with(' ') {
-                        let last = output.pop().unwrap();
-                        output.push(last.trim_end().to_string() + "\n");
-                        changes_made = true;
+                    // Ensure blank line before opening $$ (unless at start)
+                    if let Some(last_line) = output.last() {
+                        if !last_line.trim().is_empty() {
+                            output.push("\n".to_string());
+                            changes_made = true;
+                        }
                     }
                     output.push("$$\n".to_string());
+                } else {
+                    // Closing $$ - remove trailing space from previous line
+                    if let Some(last) = output.last_mut() {
+                        if last.trim_end().ends_with(' ') {
+                            let trimmed = last.trim_end().to_string() + "\n";
+                            *last = trimmed;
+                            changes_made = true;
+                        }
+                    }
+                    output.push("$$\n".to_string());
+
+                    // Ensure blank line after math block if next line is non-empty
+                    if i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
+                        output.push("\n".to_string());
+                        changes_made = true;
+                    }
                 }
                 i += 1;
                 continue;
@@ -1685,14 +1887,14 @@ fn main() {
                 .short('w')
                 .long("width")
                 .value_name("X")
-                .help(format!("Text wrap width in characters (default: {})", DEFAULT_WRAP_WIDTH))
+                .help(format!("Text wrap width in characters (default: {}, or from config file)", DEFAULT_WRAP_WIDTH))
                 .value_parser(clap::value_parser!(usize)),
         )
         .arg(
             Arg::new("overwrite")
                 .short('o')
                 .long("overwrite")
-                .help("Overwrite files in place. If not specified, output to STDOUT.")
+                .help("Overwrite files in place. If not specified, output to STDOUT (or use config file setting).")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -1712,6 +1914,10 @@ fn main() {
 Available linting rules (use with --skip):
 {}
 
+Group keywords (expand to multiple rules):
+  - code-block-newlines: Skip all code block newline rules (6,7)
+  - display-math-newlines: Skip display math newline handling (21)
+
 Sub-keywords (for specific rule features):
   - em-dash: Skip em dash conversion (use with typography rule)
   - guillemet: Skip guillemet conversion (use with typography rule)
@@ -1729,14 +1935,51 @@ Examples:
         ))
         .get_matches();
 
+    // Handle --init-config flag
+    if matches.get_flag("init-config") {
+        match init_config_file(true) {
+            Some(config_file) => {
+                eprintln!("Created config file at: {}", config_file.display());
+                eprintln!("Edit this file to customize which rules are enabled.");
+                std::process::exit(0);
+            }
+            None => {
+                eprintln!("Error: Could not create config file.");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Auto-init config if it doesn't exist and running interactively
+    let (_config_dir, config_file) = get_config_path();
+    if config_file.is_none() && atty::is(atty::Stream::Stdout) {
+        if let Some(config_file) = init_config_file(false) {
+            eprintln!("Created initial config file at: {}", config_file.display());
+            eprintln!("Edit this file to customize which rules are enabled.");
+        }
+    }
+
+    // Load config file (if available)
+    let config = load_config();
+
+    // Merge config with CLI args (CLI overrides config)
     let wrap_width = matches
         .get_one::<usize>("width")
         .copied()
+        .or_else(|| config.as_ref().and_then(|c| c.width))
         .unwrap_or(DEFAULT_WRAP_WIDTH);
-    let overwrite = matches.get_flag("overwrite");
-    let skip_str = matches.get_one::<String>("skip");
+    let overwrite = matches.get_flag("overwrite")
+        || config.as_ref().and_then(|c| c.overwrite).unwrap_or(false);
 
-    let (skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
+    // Start with config skip_rules, then merge CLI skip rules
+    let mut skip_rules = if let Some(ref cfg) = config {
+        parse_config_rules(cfg)
+    } else {
+        HashSet::new()
+    };
+
+    let skip_str = matches.get_one::<String>("skip");
+    let (cli_skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
         match parse_skip_rules(skip_str) {
             Ok(result) => result,
             Err(e) => {
@@ -1747,6 +1990,9 @@ Examples:
     } else {
         (HashSet::new(), false, false)
     };
+
+    // Merge CLI skip rules into config skip rules (CLI overrides config)
+    skip_rules.extend(cli_skip_rules);
 
     let mut files: Vec<String> = if let Some(file_args) = matches.get_many::<String>("files") {
         file_args.map(|s| s.to_string()).collect()

@@ -121,11 +121,65 @@ Rules can be skipped using either their number or keyword:
 - `18` / `ref-link-spacing` - Normalize reference-style link definition spacing
 - `19` / `task-checkbox` - Normalize task list checkbox
 - `20` / `blockquote-spacing` - Normalize blockquote spacing
-- `21` / `math-spacing` - Normalize display math block spacing
+- `21` / `math-spacing` - Normalize display math block spacing (including surrounding newlines)
 - `22` / `table-format` - Normalize table formatting
 - `23` / `emoji-spellcheck` - Normalize emoji names
 - `24` / `typography` - Normalize typography (sub-keywords: `em-dash`, `guillemet`)
 - `25` / `bold-italic` - Normalize bold/italic markers
+- `26` / `list-markers` - Normalize list markers (renumber ordered lists, standardize bullet markers by level)
+
+Group keywords (expand to multiple rules):
+
+- `code-block-newlines` - Skip all code block newline rules (equivalent to skipping `6` and `7`)
+- `display-math-newlines` - Skip display math newline handling (equivalent to skipping `21`)
+
+## Configuration File
+
+You can create a configuration file to set default options. The config file is located at:
+- `$XDG_CONFIG_HOME/md-fixup/config.yml` (or `config.yaml`)
+- `~/.config/md-fixup/config.yml` (fallback if `XDG_CONFIG_HOME` is not set)
+
+### Initializing the Config File
+
+To create an initial config file with all rules enabled by name, use:
+
+```bash
+md-fixup --init-config
+```
+
+This creates `~/.config/md-fixup/config.yml` with all rules listed, making it easy to edit and disable specific rules.
+
+**Note:** If no config file exists and you run `md-fixup` interactively (from a terminal), it will automatically create the initial config file for you. This only happens when running interactively to avoid creating files during background/automated runs.
+
+The configuration file is a YAML file with the following structure:
+
+```yaml
+width: 60
+overwrite: false
+rules:
+  skip: all
+  include:
+    - line-endings
+    - blank-lines
+```
+
+Or to skip specific rules:
+
+```yaml
+width: 80
+overwrite: true
+rules:
+  skip:
+    - line-endings
+    - blank-lines
+    - wrap
+```
+
+**Configuration merging:**
+- Command-line arguments always override config file settings
+- Rules specified in `--skip` are merged with config file rules (CLI takes precedence)
+- The `skip: all` pattern starts with all rules disabled, then includes only the specified rules
+- Group keywords (`code-block-newlines`, `display-math-newlines`) work in config files
 
 ## Examples
 

@@ -34,7 +34,13 @@ Table cleanup script: Dr. Drang <https://leancrew.com/>
 import re
 import sys
 import argparse
+import os
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 DEFAULT_WRAP_WIDTH = 60
 
@@ -1661,7 +1667,7 @@ def get_blockquote_prefix(line):
     return ''
 
 def should_preserve_line(line):
-    """Check if line should not be wrapped (code blocks, headers, tables, etc.)"""
+    """Check if line should not be wrapped (code blocks, headers, etc.)"""
     stripped = line.strip()
     # Fenced code blocks
     if is_code_block(line):
@@ -1671,9 +1677,6 @@ def should_preserve_line(line):
         return True
     # Horizontal rules
     if is_horizontal_rule(line):
-        return True
-    # Tables (lines with pipes)
-    if '|' in stripped:
         return True
     # Empty lines
     if not stripped:
@@ -1805,14 +1808,29 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                     line = normalized_code
                     changes_made = True
 
+            # Determine if this is the opening or closing fence before toggling
+            is_opening = not in_code_block
             in_code_block = not in_code_block
+
             # Ensure blank line before code block (unless at start)
-            if 6 not in skip_rules:
-                if not in_code_block and output and output[-1].strip():
-                    if output[-1].strip() and not output[-1].strip().startswith('```'):
+            if 6 not in skip_rules and is_opening:
+                if output and output[-1].strip():
+                    last = output[-1].strip()
+                    if not last.startswith('```'):
                         output.append('\n')
                         changes_made = True
+
+            # If this is the closing fence, remove trailing blank lines inside the code block
+            if not is_opening:
+                while output and not output[-1].strip():
+                    # Do not remove the opening fence if the block was empty
+                    if output[-1].strip().startswith('```'):
+                        break
+                    output.pop()
+                    changes_made = True
+
             output.append(line)
+
             # Ensure blank line after code block
             if 7 not in skip_rules:
                 if not in_code_block and i + 1 < len(lines) and lines[i + 1].strip():
@@ -1873,6 +1891,11 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 in_math_block = not in_math_block
 
                 if is_opening:
+                    # Ensure blank line before opening $$ (unless at start)
+                    if output and output[-1].strip():
+                        output.append('\n')
+                        changes_made = True
+
                     # Opening $$ - no space after
                     output.append('$$')
                     # Check if next line has leading space and remove it
@@ -1887,6 +1910,12 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                         output[-1] = output[-1].rstrip() + '\n'
                         changes_made = True
                     output.append('$$\n')
+
+                    # Ensure blank line after math block if next line is non-empty
+                    if i + 1 < len(lines) and lines[i + 1].strip():
+                        output.append('\n')
+                        changes_made = True
+
                 i += 1
                 continue
             elif in_math_block:
@@ -2280,6 +2309,166 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
         sys.stdout.writelines(output)
         return changes_made
 
+def get_config_path():
+    """Get the config directory and file path
+
+    Returns:
+        tuple of (config_dir Path, config_file Path or None)
+    """
+    # Determine config directory
+    config_dir = os.environ.get('XDG_CONFIG_HOME')
+    if not config_dir:
+        config_dir = os.path.expanduser('~/.config')
+    config_dir = Path(config_dir) / 'md-fixup'
+
+    # Try config.yml first, then config.yaml
+    config_file = None
+    for filename in ['config.yml', 'config.yaml']:
+        candidate = config_dir / filename
+        if candidate.exists():
+            config_file = candidate
+            break
+
+    return config_dir, config_file
+
+def init_config_file(force=False):
+    """Initialize the config file with all rules enabled by name
+
+    Args:
+        force: If True, create config even if it exists
+
+    Returns:
+        Path to created config file, or None if not created
+    """
+    if yaml is None:
+        return None
+
+    config_dir, config_file = get_config_path()
+
+    # Don't overwrite existing config unless forced
+    if config_file and not force:
+        return None
+
+    # Create config directory if it doesn't exist
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate config with all rules enabled
+    all_rules = sorted([desc[1] for desc in LINTING_RULES.values()])
+
+    config_content = {
+        'width': DEFAULT_WRAP_WIDTH,
+        'overwrite': False,
+        'rules': {
+            'skip': 'all',
+            'include': all_rules
+        }
+    }
+
+    # Write to config.yml
+    config_file = config_dir / 'config.yml'
+    try:
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_content, f, default_flow_style=False, sort_keys=False)
+        return config_file
+    except Exception:
+        return None
+
+def load_config():
+    """Load configuration from XDG_CONFIG_HOME/md-fixup/config.yml or ~/.config/md-fixup/config.yml
+
+    Returns:
+        dict with keys: width, overwrite, skip_rules (set of rule numbers)
+        Returns None if config file doesn't exist or YAML is not available
+    """
+    if yaml is None:
+        return None
+
+    config_dir, config_file = get_config_path()
+
+    if not config_file:
+        return None
+
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+
+        if not config:
+            return None
+
+        result = {
+            'width': config.get('width'),
+            'overwrite': config.get('overwrite'),
+            'skip_rules': set(),
+        }
+
+        # Parse rules section
+        if 'rules' in config and isinstance(config['rules'], dict):
+            rules_config = config['rules']
+
+            # Handle skip: all + include: [...] pattern
+            if rules_config.get('skip') == 'all':
+                # Start with all rules disabled
+                all_rule_nums = set(LINTING_RULES.keys())
+                result['skip_rules'] = all_rule_nums.copy()
+
+                # Then include the specified rules
+                if 'include' in rules_config:
+                    include_list = rules_config['include']
+                    if not isinstance(include_list, list):
+                        include_list = [include_list]
+
+                    for item in include_list:
+                        # Handle group keywords
+                        if item == 'code-block-newlines':
+                            result['skip_rules'].discard(6)
+                            result['skip_rules'].discard(7)
+                        elif item == 'display-math-newlines':
+                            result['skip_rules'].discard(21)
+                        elif item in KEYWORD_TO_RULE:
+                            result['skip_rules'].discard(KEYWORD_TO_RULE[item])
+                        elif item.isdigit() and int(item) in LINTING_RULES:
+                            result['skip_rules'].discard(int(item))
+
+            # Handle simple skip: [...] pattern
+            elif 'skip' in rules_config:
+                skip_list = rules_config['skip']
+                if not isinstance(skip_list, list):
+                    skip_list = [skip_list]
+
+                for item in skip_list:
+                    # Handle group keywords
+                    if item == 'code-block-newlines':
+                        result['skip_rules'].update({6, 7})
+                    elif item == 'display-math-newlines':
+                        result['skip_rules'].add(21)
+                    elif item in KEYWORD_TO_RULE:
+                        result['skip_rules'].add(KEYWORD_TO_RULE[item])
+                    elif item.isdigit() and int(item) in LINTING_RULES:
+                        result['skip_rules'].add(int(item))
+
+            # Handle include: [...] pattern (without skip: all)
+            if 'include' in rules_config and rules_config.get('skip') != 'all':
+                include_list = rules_config['include']
+                if not isinstance(include_list, list):
+                    include_list = [include_list]
+
+                for item in include_list:
+                    # Handle group keywords
+                    if item == 'code-block-newlines':
+                        result['skip_rules'].discard(6)
+                        result['skip_rules'].discard(7)
+                    elif item == 'display-math-newlines':
+                        result['skip_rules'].discard(21)
+                    elif item in KEYWORD_TO_RULE:
+                        result['skip_rules'].discard(KEYWORD_TO_RULE[item])
+                    elif item.isdigit() and int(item) in LINTING_RULES:
+                        result['skip_rules'].discard(int(item))
+
+        return result
+    except Exception as e:
+        # Silently ignore config file errors
+        return None
+
 def main():
     """Main entry point"""
     rules_list = '\n'.join(f'  {num}. {desc[0]} ({desc[1]})' for num, desc in sorted(LINTING_RULES.items()))
@@ -2321,20 +2510,25 @@ The linter:
     parser.add_argument(
         '-w', '--width',
         type=int,
-        default=DEFAULT_WRAP_WIDTH,
+        default=None,
         metavar='X',
-        help=f'Text wrap width in characters (default: {DEFAULT_WRAP_WIDTH})'
+        help=f'Text wrap width in characters (default: {DEFAULT_WRAP_WIDTH}, or from config file)'
     )
     parser.add_argument(
         '-o', '--overwrite',
         action='store_true',
-        help='Overwrite files in place. If not specified, output to STDOUT.'
+        help='Overwrite files in place. If not specified, output to STDOUT (or use config file setting).'
     )
     parser.add_argument(
         '-s', '--skip',
         type=str,
         metavar='X[,X]',
         help='Comma-separated list of rule numbers or keywords to skip (e.g., --skip 2,3 or --skip wrap,end-newline). See available rules below.'
+    )
+    parser.add_argument(
+        '--init-config',
+        action='store_true',
+        help='Initialize the config file with all rules enabled by name (creates ~/.config/md-fixup/config.yml)'
     )
     parser.add_argument(
         'files',
@@ -2344,20 +2538,59 @@ The linter:
     )
 
     args = parser.parse_args()
-    wrap_width = args.width
-    overwrite = args.overwrite
+
+    # Handle --init-config flag
+    if args.init_config:
+        config_file = init_config_file(force=True)
+        if config_file:
+            print(f"Created config file at: {config_file}", file=sys.stderr)
+            print("Edit this file to customize which rules are enabled.", file=sys.stderr)
+            sys.exit(0)
+        else:
+            print("Error: Could not create config file. Is PyYAML installed?", file=sys.stderr)
+            sys.exit(1)
+
+    # Auto-init config if it doesn't exist and running interactively
+    config_dir, config_file = get_config_path()
+    if not config_file and sys.stdout.isatty():
+        config_file = init_config_file(force=False)
+        if config_file:
+            print(f"Created initial config file at: {config_file}", file=sys.stderr)
+            print("Edit this file to customize which rules are enabled.", file=sys.stderr)
+
+    # Load config file (if available)
+    config = load_config()
+
+    # Merge config with CLI args (CLI overrides config)
+    wrap_width = args.width if args.width is not None else (config['width'] if config and config.get('width') is not None else DEFAULT_WRAP_WIDTH)
+    # For overwrite: CLI flag always wins if present, otherwise use config, otherwise False
+    overwrite = args.overwrite if args.overwrite else (config['overwrite'] if config and config.get('overwrite') is not None else False)
     files = args.files
 
-    # Parse skip rules (accepts both numbers and keywords)
+    # Start with config skip_rules, then merge CLI skip rules
+    skip_rules = config['skip_rules'].copy() if config and config.get('skip_rules') else set()
+
+    # Parse skip rules from CLI (accepts both numbers and keywords)
     # Also supports sub-keywords: em-dash, guillemet (for typography rule)
     skip_rules = set()
     if args.skip:
         skip_values = [x.strip() for x in args.skip.split(',')]
         for value in skip_values:
-            # Check for sub-keywords first (these don't map to rule numbers)
+            # Group keywords that map to multiple underlying rules
+            if value == 'code-block-newlines':
+                # Skip both before/after code block rules
+                skip_rules.update({6, 7})
+                continue
+            if value == 'display-math-newlines':
+                # Skip display math block spacing and surrounding newlines
+                skip_rules.add(21)
+                continue
+
+            # Check for sub-keywords first (these don't map directly to rule numbers)
             if value in ('em-dash', 'guillemet'):
                 # These are handled separately in process_file via skip_string
                 continue
+
             # Try to parse as number first
             try:
                 rule_num = int(value)
@@ -2372,7 +2605,10 @@ The linter:
                     skip_rules.add(KEYWORD_TO_RULE[value])
                 else:
                     print(f"Error: Invalid keyword: {value}", file=sys.stderr)
-                    valid_keywords = ', '.join(sorted(KEYWORD_TO_RULE.keys()) + ['em-dash', 'guillemet'])
+                    valid_keywords = ', '.join(
+                        sorted(KEYWORD_TO_RULE.keys())
+                        + ['em-dash', 'guillemet', 'code-block-newlines', 'display-math-newlines']
+                    )
                     print(f"Valid keywords are: {valid_keywords}", file=sys.stderr)
                     sys.exit(1)
 

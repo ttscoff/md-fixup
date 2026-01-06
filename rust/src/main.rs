@@ -11,134 +11,877 @@ const DEFAULT_WRAP_WIDTH: usize = 60;
 
 // Valid GitHub emoji names (normalized: lowercase, hyphens to underscores)
 const VALID_EMOJI_NAMES: &[&str] = &[
-    "+1", "100", "1234", "8ball", "_1", "a", "ab", "abc", "abcd", "accept", "aerial_tramway",
-    "airplane", "alarm_clock", "alien", "ambulance", "anchor", "angel", "anger", "angry",
-    "anguished", "ant", "apple", "aquarius", "aries", "arrow_backward", "arrow_double_down",
-    "arrow_double_up", "arrow_down", "arrow_down_small", "arrow_forward", "arrow_heading_down",
-    "arrow_heading_up", "arrow_left", "arrow_lower_left", "arrow_lower_right", "arrow_right",
-    "arrow_right_hook", "arrow_up", "arrow_up_down", "arrow_up_small", "arrow_upper_left",
-    "arrow_upper_right", "arrows_clockwise", "arrows_counterclockwise", "art", "articulated_lorry",
-    "astonished", "atm", "b", "baby", "baby_bottle", "baby_chick", "baby_symbol", "back",
-    "baggage_claim", "balloon", "ballot_box_with_check", "bamboo", "banana", "bangbang", "bank",
-    "bar_chart", "barber", "baseball", "basketball", "bath", "bathtub", "battery", "bear", "bee",
-    "beer", "beers", "beetle", "beginner", "bell", "bento", "bicyclist", "bike", "bikini", "bird",
-    "birthday", "black_circle", "black_joker", "black_large_square", "black_medium_small_square",
-    "black_medium_square", "black_nib", "black_small_square", "black_square_button", "blossom",
-    "blowfish", "blue_book", "blue_car", "blue_heart", "blush", "boar", "boat", "bomb", "book",
-    "bookmark", "bookmark_tabs", "books", "boom", "boot", "bouquet", "bow", "bowling", "boy",
-    "bread", "bride_with_veil", "bridge_at_night", "briefcase", "broken_heart", "bug", "bulb",
-    "bullettrain_front", "bullettrain_side", "bus", "busstop", "bust_in_silhouette",
-    "busts_in_silhouette", "cactus", "cake", "calendar", "calling", "camel", "camera", "cancer",
-    "candy", "capital_abcd", "capricorn", "car", "card_index", "carousel_horse", "cat", "cat2",
-    "cd", "chart", "chart_with_downwards_trend", "chart_with_upwards_trend", "checkered_flag",
-    "cherries", "cherry_blossom", "chestnut", "chicken", "children_crossing", "chocolate_bar",
-    "christmas_tree", "church", "cinema", "circus_tent", "city_sunrise", "city_sunset", "cl",
-    "clap", "clapper", "clipboard", "clock1", "clock10", "clock11", "clock12", "clock130",
-    "clock2", "clock230", "clock3", "clock330", "clock4", "clock430", "clock5", "clock530",
-    "clock6", "clock630", "clock7", "clock730", "clock8", "clock830", "clock9", "clock930",
-    "closed_book", "closed_lock_with_key", "closed_umbrella", "cloud", "clubs", "cn", "cocktail",
-    "coffee", "cold_sweat", "collision", "computer", "confetti_ball", "confounded", "confused",
-    "congratulations", "construction", "construction_worker", "convenience_store", "cookie",
-    "cool", "cop", "copyright", "corn", "couple", "couple_with_heart", "couplekiss", "cow",
-    "cow2", "credit_card", "crescent_moon", "crossed_flags", "crown", "cry", "crying_cat_face",
-    "crystal_ball", "cupid", "curly_loop", "currency_exchange", "curry", "custard", "customs",
-    "dancer", "dancers", "dango", "dart", "dash", "date", "de", "deciduous_tree",
-    "department_store", "diamond_shape_with_a_dot_inside", "diamonds", "disappointed",
-    "disappointed_relieved", "dizzy", "dizzy_face", "do_not_litter", "dog", "dog2", "dollar",
-    "dolls", "dolphin", "donut", "door", "doughnut", "dragon", "dragon_face", "dress",
-    "dromedary_camel", "droplet", "dvd", "ear", "ear_of_rice", "earth_africa", "earth_americas",
-    "earth_asia", "egg", "eggplant", "eight", "eight_pointed_black_star", "eight_spoked_asterisk",
-    "electric_plug", "elephant", "email", "end", "envelope", "envelope_with_arrow", "es", "euro",
-    "european_castle", "european_post_office", "evergreen_tree", "exclamation", "expressionless",
-    "eyeglasses", "eyes", "facepunch", "factory", "fallen_leaf", "family", "fast_forward", "fax",
-    "fearful", "feelsgood", "feet", "ferris_wheel", "file_folder", "finnadie", "fire", "fireworks",
-    "first_quarter_moon", "first_quarter_moon_with_face", "fish", "fish_cake",
-    "fishing_pole_and_fish", "fist", "five", "flags", "flashlight", "flipper", "floppy_disk",
-    "flower_playing_cards", "flushed", "foggy", "football", "footprints", "fork_and_knife",
-    "fountain", "four", "four_leaf_clover", "fr", "free", "fried_shrimp", "fries", "frog",
-    "frowning", "fu", "fuelpump", "full_moon", "full_moon_with_face", "game_die", "gb", "gem",
-    "gemini", "ghost", "gift", "gift_heart", "girl", "globe_with_meridians", "goat", "goberserk",
-    "godmode", "golf", "grapes", "green_apple", "green_book", "green_heart", "grey_exclamation",
-    "grey_question", "grimacing", "grin", "grinning", "guardsman", "guitar", "gun", "haircut",
-    "hamburger", "hammer", "hamster", "hand", "handbag", "hankey", "hatched_chick",
-    "hatching_chick", "headphones", "hear_no_evil", "heart", "heart_decoration", "heart_eyes",
-    "heart_eyes_cat", "heartbeat", "heartpulse", "hearts", "heavy_check_mark",
-    "heavy_division_sign", "heavy_dollar_sign", "heavy_exclamation_mark", "heavy_minus_sign",
-    "heavy_multiplication_x", "heavy_plus_sign", "helicopter", "herb", "hibiscus",
-    "high_brightness", "high_heel", "hocho", "honey_pot", "honeybee", "horse", "horse_racing",
-    "hospital", "hotel", "hotsprings", "hourglass", "hourglass_flowing_sand", "house",
-    "house_with_garden", "hushed", "ice_cream", "icecream", "id", "ideograph_advantage", "imp",
-    "inbox_tray", "incoming_envelope", "information_desk_person", "information_source", "innocent",
-    "interrobang", "iphone", "it", "izakaya_lantern", "jack_o_lantern", "japan", "japanese_castle",
-    "japanese_goblin", "japanese_ogre", "jeans", "joy", "joy_cat", "jp", "key", "keycap_ten",
-    "kimono", "kiss", "kissing", "kissing_cat", "kissing_closed_eyes", "kissing_heart",
-    "kissing_smiling_eyes", "koala", "koko", "kr", "large_blue_circle", "large_blue_diamond",
-    "large_orange_diamond", "last_quarter_moon", "last_quarter_moon_with_face", "laughing",
-    "leaves", "ledger", "left_luggage", "left_right_arrow", "leftwards_arrow_with_hook", "lemon",
-    "leo", "leopard", "libra", "light_rail", "link", "lips", "lipstick", "lock",
-    "lock_with_ink_pen", "lollipop", "loop", "loudspeaker", "love_hotel", "love_letter",
-    "low_brightness", "m", "mag", "mag_right", "mahjong", "mailbox", "mailbox_closed",
-    "mailbox_with_mail", "mailbox_with_no_mail", "man", "man_with_gua_pi_mao", "man_with_turban",
-    "mans_shoe", "maple_leaf", "mask", "massage", "meat_on_bone", "mega", "melon", "memo", "mens",
-    "metal", "metro", "microphone", "microscope", "milky_way", "minibus", "minidisc",
-    "mobile_phone_off", "money_with_wings", "moneybag", "monkey", "monkey_face", "monorail",
-    "moon", "mortar_board", "mount_fuji", "mountain_bicyclist", "mountain_cableway",
-    "mountain_railway", "mouse", "mouse2", "movie_camera", "moyai", "muscle", "mushroom",
-    "musical_keyboard", "musical_note", "musical_score", "mute", "nail_care", "name_badge",
-    "neckbeard", "necktie", "negative_squared_cross_mark", "neutral_face", "new", "new_moon",
-    "new_moon_with_face", "newspaper", "ng", "nine", "no_bell", "no_bicycles", "no_entry",
-    "no_entry_sign", "no_good", "no_mobile_phones", "no_mouth", "no_pedestrians", "no_smoking",
-    "non_potable_water", "nose", "notebook", "notebook_with_decorative_cover", "notes",
-    "nut_and_bolt", "o", "o2", "ocean", "octocat", "octopus", "oden", "office", "ok", "ok_hand",
-    "ok_woman", "older_man", "older_woman", "on", "oncoming_automobile", "oncoming_bus",
-    "oncoming_police_car", "oncoming_taxi", "one", "open_book", "open_file_folder", "open_hands",
-    "open_mouth", "ophiuchus", "orange_book", "outbox_tray", "ox", "package", "page_facing_up",
-    "page_with_curl", "pager", "palm_tree", "panda_face", "paperclip", "parking",
-    "part_alternation_mark", "partly_sunny", "passport_control", "paw_prints", "peach", "pear",
-    "pencil", "pencil2", "penguin", "pensive", "performing_arts", "persevere", "person_frowning",
-    "person_with_blond_hair", "person_with_pouting_face", "phone", "pig", "pig2", "pig_nose",
-    "pill", "pineapple", "pisces", "pizza", "point_down", "point_left", "point_right", "point_up",
-    "point_up_2", "police_car", "poodle", "poop", "post_office", "postal_horn", "postbox",
-    "potable_water", "pouch", "poultry_leg", "pound", "pray", "princess", "punch", "purple_heart",
-    "purse", "pushpin", "put_litter_in_its_place", "question", "rabbit", "rabbit2", "racehorse",
-    "radio", "radio_button", "rage", "rage1", "rage2", "rage3", "rage4", "railway_car", "rainbow",
-    "raised_hand", "raised_hands", "raising_hand", "ram", "ramen", "rat", "recycle", "red_car",
-    "red_circle", "registered", "relaxed", "relieved", "repeat", "repeat_one", "restroom",
-    "revolving_hearts", "rewind", "ribbon", "rice", "rice_ball", "rice_cracker", "rice_scene",
-    "ring", "rocket", "roller_coaster", "rooster", "rose", "rotating_light", "round_pushpin",
-    "rowboat", "ru", "rugby_football", "runner", "running", "running_shirt_with_sash", "sa",
-    "sagittarius", "sailboat", "sake", "sandal", "santa", "satellite", "satisfied", "saxophone",
-    "school", "school_satchel", "scissors", "scorpius", "scream", "scream_cat", "scroll", "seat",
-    "secret", "see_no_evil", "seedling", "seven", "shaved_ice", "sheep", "shell", "ship",
-    "shipit", "shirt", "shit", "shoe", "shower", "signal_strength", "six", "six_pointed_star",
-    "ski", "skull", "sleeping", "sleepy", "slot_machine", "small_blue_diamond",
-    "small_orange_diamond", "small_red_triangle", "small_red_triangle_down", "smile", "smile_cat",
-    "smiley", "smiley_cat", "smirk", "smirk_cat", "smoking", "snail", "snake", "snowboarder",
-    "snowflake", "snowman", "sob", "soccer", "soon", "sos", "sound", "space_invader", "spades",
-    "spaghetti", "sparkle", "sparkler", "sparkles", "sparkling_heart", "speak_no_evil", "speaker",
-    "speech_balloon", "speedboat", "squirrel", "star", "star2", "stars", "station",
-    "statue_of_liberty", "steam_locomotive", "stew", "straight_ruler", "strawberry",
-    "stuck_out_tongue", "stuck_out_tongue_closed_eyes", "stuck_out_tongue_winking_eye",
-    "sun_with_face", "sunflower", "sunglasses", "sunny", "sunrise", "sunrise_over_mountains",
-    "surfer", "sushi", "suspect", "suspension_railway", "sweat", "sweat_drops", "sweat_smile",
-    "sweet_potato", "swimmer", "symbols", "syringe", "tada", "tanabata_tree", "tangerine",
-    "taurus", "taxi", "tea", "telephone", "telephone_receiver", "telescope", "tennis", "tent",
-    "thought_balloon", "three", "thumbsdown", "thumbsup", "ticket", "tiger", "tiger2",
-    "tired_face", "tm", "toilet", "tokyo_tower", "tomato", "tongue", "top", "tophat", "tractor",
-    "traffic_light", "train", "train2", "tram", "triangular_flag_on_post", "triangular_ruler",
-    "trident", "triumph", "trolleybus", "trophy", "tropical_drink", "tropical_fish", "truck",
-    "trumpet", "tshirt", "tulip", "turtle", "tv", "twisted_rightwards_arrows", "two",
-    "two_hearts", "two_men_holding_hands", "two_women_holding_hands", "u5272", "u5408", "u55b6",
-    "u6307", "u6708", "u6709", "u6e80", "u7121", "u7533", "u7981", "u7a7a", "uk", "umbrella",
-    "unamused", "underage", "unlock", "up", "us", "v", "vertical_traffic_light", "vhs",
-    "vibration_mode", "video_camera", "video_game", "violin", "virgo", "volcano", "vs",
-    "walking", "waning_crescent_moon", "waning_gibbous_moon", "warning", "watch", "water_buffalo",
-    "watermelon", "wave", "wavy_dash", "waxing_crescent_moon", "waxing_gibbous_moon", "wc",
-    "weary", "wedding", "whale", "whale2", "wheelchair", "white_check_mark", "white_circle",
-    "white_flower", "white_large_square", "white_medium_small_square", "white_medium_square",
-    "white_small_square", "white_square_button", "wind_chime", "wine_glass", "wink", "wolf",
-    "woman", "womans_clothes", "womans_hat", "womens", "worried", "wrench", "x", "yellow_heart",
-    "yen", "yum", "zap", "zero", "zzz",
+    "+1",
+    "100",
+    "1234",
+    "8ball",
+    "_1",
+    "a",
+    "ab",
+    "abc",
+    "abcd",
+    "accept",
+    "aerial_tramway",
+    "airplane",
+    "alarm_clock",
+    "alien",
+    "ambulance",
+    "anchor",
+    "angel",
+    "anger",
+    "angry",
+    "anguished",
+    "ant",
+    "apple",
+    "aquarius",
+    "aries",
+    "arrow_backward",
+    "arrow_double_down",
+    "arrow_double_up",
+    "arrow_down",
+    "arrow_down_small",
+    "arrow_forward",
+    "arrow_heading_down",
+    "arrow_heading_up",
+    "arrow_left",
+    "arrow_lower_left",
+    "arrow_lower_right",
+    "arrow_right",
+    "arrow_right_hook",
+    "arrow_up",
+    "arrow_up_down",
+    "arrow_up_small",
+    "arrow_upper_left",
+    "arrow_upper_right",
+    "arrows_clockwise",
+    "arrows_counterclockwise",
+    "art",
+    "articulated_lorry",
+    "astonished",
+    "atm",
+    "b",
+    "baby",
+    "baby_bottle",
+    "baby_chick",
+    "baby_symbol",
+    "back",
+    "baggage_claim",
+    "balloon",
+    "ballot_box_with_check",
+    "bamboo",
+    "banana",
+    "bangbang",
+    "bank",
+    "bar_chart",
+    "barber",
+    "baseball",
+    "basketball",
+    "bath",
+    "bathtub",
+    "battery",
+    "bear",
+    "bee",
+    "beer",
+    "beers",
+    "beetle",
+    "beginner",
+    "bell",
+    "bento",
+    "bicyclist",
+    "bike",
+    "bikini",
+    "bird",
+    "birthday",
+    "black_circle",
+    "black_joker",
+    "black_large_square",
+    "black_medium_small_square",
+    "black_medium_square",
+    "black_nib",
+    "black_small_square",
+    "black_square_button",
+    "blossom",
+    "blowfish",
+    "blue_book",
+    "blue_car",
+    "blue_heart",
+    "blush",
+    "boar",
+    "boat",
+    "bomb",
+    "book",
+    "bookmark",
+    "bookmark_tabs",
+    "books",
+    "boom",
+    "boot",
+    "bouquet",
+    "bow",
+    "bowling",
+    "boy",
+    "bread",
+    "bride_with_veil",
+    "bridge_at_night",
+    "briefcase",
+    "broken_heart",
+    "bug",
+    "bulb",
+    "bullettrain_front",
+    "bullettrain_side",
+    "bus",
+    "busstop",
+    "bust_in_silhouette",
+    "busts_in_silhouette",
+    "cactus",
+    "cake",
+    "calendar",
+    "calling",
+    "camel",
+    "camera",
+    "cancer",
+    "candy",
+    "capital_abcd",
+    "capricorn",
+    "car",
+    "card_index",
+    "carousel_horse",
+    "cat",
+    "cat2",
+    "cd",
+    "chart",
+    "chart_with_downwards_trend",
+    "chart_with_upwards_trend",
+    "checkered_flag",
+    "cherries",
+    "cherry_blossom",
+    "chestnut",
+    "chicken",
+    "children_crossing",
+    "chocolate_bar",
+    "christmas_tree",
+    "church",
+    "cinema",
+    "circus_tent",
+    "city_sunrise",
+    "city_sunset",
+    "cl",
+    "clap",
+    "clapper",
+    "clipboard",
+    "clock1",
+    "clock10",
+    "clock11",
+    "clock12",
+    "clock130",
+    "clock2",
+    "clock230",
+    "clock3",
+    "clock330",
+    "clock4",
+    "clock430",
+    "clock5",
+    "clock530",
+    "clock6",
+    "clock630",
+    "clock7",
+    "clock730",
+    "clock8",
+    "clock830",
+    "clock9",
+    "clock930",
+    "closed_book",
+    "closed_lock_with_key",
+    "closed_umbrella",
+    "cloud",
+    "clubs",
+    "cn",
+    "cocktail",
+    "coffee",
+    "cold_sweat",
+    "collision",
+    "computer",
+    "confetti_ball",
+    "confounded",
+    "confused",
+    "congratulations",
+    "construction",
+    "construction_worker",
+    "convenience_store",
+    "cookie",
+    "cool",
+    "cop",
+    "copyright",
+    "corn",
+    "couple",
+    "couple_with_heart",
+    "couplekiss",
+    "cow",
+    "cow2",
+    "credit_card",
+    "crescent_moon",
+    "crossed_flags",
+    "crown",
+    "cry",
+    "crying_cat_face",
+    "crystal_ball",
+    "cupid",
+    "curly_loop",
+    "currency_exchange",
+    "curry",
+    "custard",
+    "customs",
+    "dancer",
+    "dancers",
+    "dango",
+    "dart",
+    "dash",
+    "date",
+    "de",
+    "deciduous_tree",
+    "department_store",
+    "diamond_shape_with_a_dot_inside",
+    "diamonds",
+    "disappointed",
+    "disappointed_relieved",
+    "dizzy",
+    "dizzy_face",
+    "do_not_litter",
+    "dog",
+    "dog2",
+    "dollar",
+    "dolls",
+    "dolphin",
+    "donut",
+    "door",
+    "doughnut",
+    "dragon",
+    "dragon_face",
+    "dress",
+    "dromedary_camel",
+    "droplet",
+    "dvd",
+    "ear",
+    "ear_of_rice",
+    "earth_africa",
+    "earth_americas",
+    "earth_asia",
+    "egg",
+    "eggplant",
+    "eight",
+    "eight_pointed_black_star",
+    "eight_spoked_asterisk",
+    "electric_plug",
+    "elephant",
+    "email",
+    "end",
+    "envelope",
+    "envelope_with_arrow",
+    "es",
+    "euro",
+    "european_castle",
+    "european_post_office",
+    "evergreen_tree",
+    "exclamation",
+    "expressionless",
+    "eyeglasses",
+    "eyes",
+    "facepunch",
+    "factory",
+    "fallen_leaf",
+    "family",
+    "fast_forward",
+    "fax",
+    "fearful",
+    "feelsgood",
+    "feet",
+    "ferris_wheel",
+    "file_folder",
+    "finnadie",
+    "fire",
+    "fireworks",
+    "first_quarter_moon",
+    "first_quarter_moon_with_face",
+    "fish",
+    "fish_cake",
+    "fishing_pole_and_fish",
+    "fist",
+    "five",
+    "flags",
+    "flashlight",
+    "flipper",
+    "floppy_disk",
+    "flower_playing_cards",
+    "flushed",
+    "foggy",
+    "football",
+    "footprints",
+    "fork_and_knife",
+    "fountain",
+    "four",
+    "four_leaf_clover",
+    "fr",
+    "free",
+    "fried_shrimp",
+    "fries",
+    "frog",
+    "frowning",
+    "fu",
+    "fuelpump",
+    "full_moon",
+    "full_moon_with_face",
+    "game_die",
+    "gb",
+    "gem",
+    "gemini",
+    "ghost",
+    "gift",
+    "gift_heart",
+    "girl",
+    "globe_with_meridians",
+    "goat",
+    "goberserk",
+    "godmode",
+    "golf",
+    "grapes",
+    "green_apple",
+    "green_book",
+    "green_heart",
+    "grey_exclamation",
+    "grey_question",
+    "grimacing",
+    "grin",
+    "grinning",
+    "guardsman",
+    "guitar",
+    "gun",
+    "haircut",
+    "hamburger",
+    "hammer",
+    "hamster",
+    "hand",
+    "handbag",
+    "hankey",
+    "hatched_chick",
+    "hatching_chick",
+    "headphones",
+    "hear_no_evil",
+    "heart",
+    "heart_decoration",
+    "heart_eyes",
+    "heart_eyes_cat",
+    "heartbeat",
+    "heartpulse",
+    "hearts",
+    "heavy_check_mark",
+    "heavy_division_sign",
+    "heavy_dollar_sign",
+    "heavy_exclamation_mark",
+    "heavy_minus_sign",
+    "heavy_multiplication_x",
+    "heavy_plus_sign",
+    "helicopter",
+    "herb",
+    "hibiscus",
+    "high_brightness",
+    "high_heel",
+    "hocho",
+    "honey_pot",
+    "honeybee",
+    "horse",
+    "horse_racing",
+    "hospital",
+    "hotel",
+    "hotsprings",
+    "hourglass",
+    "hourglass_flowing_sand",
+    "house",
+    "house_with_garden",
+    "hushed",
+    "ice_cream",
+    "icecream",
+    "id",
+    "ideograph_advantage",
+    "imp",
+    "inbox_tray",
+    "incoming_envelope",
+    "information_desk_person",
+    "information_source",
+    "innocent",
+    "interrobang",
+    "iphone",
+    "it",
+    "izakaya_lantern",
+    "jack_o_lantern",
+    "japan",
+    "japanese_castle",
+    "japanese_goblin",
+    "japanese_ogre",
+    "jeans",
+    "joy",
+    "joy_cat",
+    "jp",
+    "key",
+    "keycap_ten",
+    "kimono",
+    "kiss",
+    "kissing",
+    "kissing_cat",
+    "kissing_closed_eyes",
+    "kissing_heart",
+    "kissing_smiling_eyes",
+    "koala",
+    "koko",
+    "kr",
+    "large_blue_circle",
+    "large_blue_diamond",
+    "large_orange_diamond",
+    "last_quarter_moon",
+    "last_quarter_moon_with_face",
+    "laughing",
+    "leaves",
+    "ledger",
+    "left_luggage",
+    "left_right_arrow",
+    "leftwards_arrow_with_hook",
+    "lemon",
+    "leo",
+    "leopard",
+    "libra",
+    "light_rail",
+    "link",
+    "lips",
+    "lipstick",
+    "lock",
+    "lock_with_ink_pen",
+    "lollipop",
+    "loop",
+    "loudspeaker",
+    "love_hotel",
+    "love_letter",
+    "low_brightness",
+    "m",
+    "mag",
+    "mag_right",
+    "mahjong",
+    "mailbox",
+    "mailbox_closed",
+    "mailbox_with_mail",
+    "mailbox_with_no_mail",
+    "man",
+    "man_with_gua_pi_mao",
+    "man_with_turban",
+    "mans_shoe",
+    "maple_leaf",
+    "mask",
+    "massage",
+    "meat_on_bone",
+    "mega",
+    "melon",
+    "memo",
+    "mens",
+    "metal",
+    "metro",
+    "microphone",
+    "microscope",
+    "milky_way",
+    "minibus",
+    "minidisc",
+    "mobile_phone_off",
+    "money_with_wings",
+    "moneybag",
+    "monkey",
+    "monkey_face",
+    "monorail",
+    "moon",
+    "mortar_board",
+    "mount_fuji",
+    "mountain_bicyclist",
+    "mountain_cableway",
+    "mountain_railway",
+    "mouse",
+    "mouse2",
+    "movie_camera",
+    "moyai",
+    "muscle",
+    "mushroom",
+    "musical_keyboard",
+    "musical_note",
+    "musical_score",
+    "mute",
+    "nail_care",
+    "name_badge",
+    "neckbeard",
+    "necktie",
+    "negative_squared_cross_mark",
+    "neutral_face",
+    "new",
+    "new_moon",
+    "new_moon_with_face",
+    "newspaper",
+    "ng",
+    "nine",
+    "no_bell",
+    "no_bicycles",
+    "no_entry",
+    "no_entry_sign",
+    "no_good",
+    "no_mobile_phones",
+    "no_mouth",
+    "no_pedestrians",
+    "no_smoking",
+    "non_potable_water",
+    "nose",
+    "notebook",
+    "notebook_with_decorative_cover",
+    "notes",
+    "nut_and_bolt",
+    "o",
+    "o2",
+    "ocean",
+    "octocat",
+    "octopus",
+    "oden",
+    "office",
+    "ok",
+    "ok_hand",
+    "ok_woman",
+    "older_man",
+    "older_woman",
+    "on",
+    "oncoming_automobile",
+    "oncoming_bus",
+    "oncoming_police_car",
+    "oncoming_taxi",
+    "one",
+    "open_book",
+    "open_file_folder",
+    "open_hands",
+    "open_mouth",
+    "ophiuchus",
+    "orange_book",
+    "outbox_tray",
+    "ox",
+    "package",
+    "page_facing_up",
+    "page_with_curl",
+    "pager",
+    "palm_tree",
+    "panda_face",
+    "paperclip",
+    "parking",
+    "part_alternation_mark",
+    "partly_sunny",
+    "passport_control",
+    "paw_prints",
+    "peach",
+    "pear",
+    "pencil",
+    "pencil2",
+    "penguin",
+    "pensive",
+    "performing_arts",
+    "persevere",
+    "person_frowning",
+    "person_with_blond_hair",
+    "person_with_pouting_face",
+    "phone",
+    "pig",
+    "pig2",
+    "pig_nose",
+    "pill",
+    "pineapple",
+    "pisces",
+    "pizza",
+    "point_down",
+    "point_left",
+    "point_right",
+    "point_up",
+    "point_up_2",
+    "police_car",
+    "poodle",
+    "poop",
+    "post_office",
+    "postal_horn",
+    "postbox",
+    "potable_water",
+    "pouch",
+    "poultry_leg",
+    "pound",
+    "pray",
+    "princess",
+    "punch",
+    "purple_heart",
+    "purse",
+    "pushpin",
+    "put_litter_in_its_place",
+    "question",
+    "rabbit",
+    "rabbit2",
+    "racehorse",
+    "radio",
+    "radio_button",
+    "rage",
+    "rage1",
+    "rage2",
+    "rage3",
+    "rage4",
+    "railway_car",
+    "rainbow",
+    "raised_hand",
+    "raised_hands",
+    "raising_hand",
+    "ram",
+    "ramen",
+    "rat",
+    "recycle",
+    "red_car",
+    "red_circle",
+    "registered",
+    "relaxed",
+    "relieved",
+    "repeat",
+    "repeat_one",
+    "restroom",
+    "revolving_hearts",
+    "rewind",
+    "ribbon",
+    "rice",
+    "rice_ball",
+    "rice_cracker",
+    "rice_scene",
+    "ring",
+    "rocket",
+    "roller_coaster",
+    "rooster",
+    "rose",
+    "rotating_light",
+    "round_pushpin",
+    "rowboat",
+    "ru",
+    "rugby_football",
+    "runner",
+    "running",
+    "running_shirt_with_sash",
+    "sa",
+    "sagittarius",
+    "sailboat",
+    "sake",
+    "sandal",
+    "santa",
+    "satellite",
+    "satisfied",
+    "saxophone",
+    "school",
+    "school_satchel",
+    "scissors",
+    "scorpius",
+    "scream",
+    "scream_cat",
+    "scroll",
+    "seat",
+    "secret",
+    "see_no_evil",
+    "seedling",
+    "seven",
+    "shaved_ice",
+    "sheep",
+    "shell",
+    "ship",
+    "shipit",
+    "shirt",
+    "shit",
+    "shoe",
+    "shower",
+    "signal_strength",
+    "six",
+    "six_pointed_star",
+    "ski",
+    "skull",
+    "sleeping",
+    "sleepy",
+    "slot_machine",
+    "small_blue_diamond",
+    "small_orange_diamond",
+    "small_red_triangle",
+    "small_red_triangle_down",
+    "smile",
+    "smile_cat",
+    "smiley",
+    "smiley_cat",
+    "smirk",
+    "smirk_cat",
+    "smoking",
+    "snail",
+    "snake",
+    "snowboarder",
+    "snowflake",
+    "snowman",
+    "sob",
+    "soccer",
+    "soon",
+    "sos",
+    "sound",
+    "space_invader",
+    "spades",
+    "spaghetti",
+    "sparkle",
+    "sparkler",
+    "sparkles",
+    "sparkling_heart",
+    "speak_no_evil",
+    "speaker",
+    "speech_balloon",
+    "speedboat",
+    "squirrel",
+    "star",
+    "star2",
+    "stars",
+    "station",
+    "statue_of_liberty",
+    "steam_locomotive",
+    "stew",
+    "straight_ruler",
+    "strawberry",
+    "stuck_out_tongue",
+    "stuck_out_tongue_closed_eyes",
+    "stuck_out_tongue_winking_eye",
+    "sun_with_face",
+    "sunflower",
+    "sunglasses",
+    "sunny",
+    "sunrise",
+    "sunrise_over_mountains",
+    "surfer",
+    "sushi",
+    "suspect",
+    "suspension_railway",
+    "sweat",
+    "sweat_drops",
+    "sweat_smile",
+    "sweet_potato",
+    "swimmer",
+    "symbols",
+    "syringe",
+    "tada",
+    "tanabata_tree",
+    "tangerine",
+    "taurus",
+    "taxi",
+    "tea",
+    "telephone",
+    "telephone_receiver",
+    "telescope",
+    "tennis",
+    "tent",
+    "thought_balloon",
+    "three",
+    "thumbsdown",
+    "thumbsup",
+    "ticket",
+    "tiger",
+    "tiger2",
+    "tired_face",
+    "tm",
+    "toilet",
+    "tokyo_tower",
+    "tomato",
+    "tongue",
+    "top",
+    "tophat",
+    "tractor",
+    "traffic_light",
+    "train",
+    "train2",
+    "tram",
+    "triangular_flag_on_post",
+    "triangular_ruler",
+    "trident",
+    "triumph",
+    "trolleybus",
+    "trophy",
+    "tropical_drink",
+    "tropical_fish",
+    "truck",
+    "trumpet",
+    "tshirt",
+    "tulip",
+    "turtle",
+    "tv",
+    "twisted_rightwards_arrows",
+    "two",
+    "two_hearts",
+    "two_men_holding_hands",
+    "two_women_holding_hands",
+    "u5272",
+    "u5408",
+    "u55b6",
+    "u6307",
+    "u6708",
+    "u6709",
+    "u6e80",
+    "u7121",
+    "u7533",
+    "u7981",
+    "u7a7a",
+    "uk",
+    "umbrella",
+    "unamused",
+    "underage",
+    "unlock",
+    "up",
+    "us",
+    "v",
+    "vertical_traffic_light",
+    "vhs",
+    "vibration_mode",
+    "video_camera",
+    "video_game",
+    "violin",
+    "virgo",
+    "volcano",
+    "vs",
+    "walking",
+    "waning_crescent_moon",
+    "waning_gibbous_moon",
+    "warning",
+    "watch",
+    "water_buffalo",
+    "watermelon",
+    "wave",
+    "wavy_dash",
+    "waxing_crescent_moon",
+    "waxing_gibbous_moon",
+    "wc",
+    "weary",
+    "wedding",
+    "whale",
+    "whale2",
+    "wheelchair",
+    "white_check_mark",
+    "white_circle",
+    "white_flower",
+    "white_large_square",
+    "white_medium_small_square",
+    "white_medium_square",
+    "white_small_square",
+    "white_square_button",
+    "wind_chime",
+    "wine_glass",
+    "wink",
+    "wolf",
+    "woman",
+    "womans_clothes",
+    "womans_hat",
+    "womens",
+    "worried",
+    "wrench",
+    "x",
+    "yellow_heart",
+    "yen",
+    "yum",
+    "zap",
+    "zero",
+    "zzz",
 ];
 
 fn valid_emoji_names_set() -> HashSet<&'static str> {
@@ -160,7 +903,8 @@ fn is_list_item(line: &str) -> bool {
 fn is_headline(line: &str) -> bool {
     let stripped = line.trim();
     // Match # followed by either whitespace or content (to catch malformed headlines like #BadHeader)
-    Regex::new(r"^#+\s").unwrap().is_match(stripped) || Regex::new(r"^#+[^\s#]").unwrap().is_match(stripped)
+    Regex::new(r"^#+\s").unwrap().is_match(stripped)
+        || Regex::new(r"^#+[^\s#]").unwrap().is_match(stripped)
 }
 
 fn is_horizontal_rule(line: &str) -> bool {
@@ -316,8 +1060,12 @@ fn normalize_math_spacing(line: &str, is_in_code_block: bool) -> String {
 
         // Check if closing $ has space before it and non-space after it
         let has_space_before_closing = content.ends_with(' ') || content.ends_with('\t');
-        let has_non_space_after = match_end < result_str.len() &&
-            !result_str.chars().nth(match_end).map(|c| c.is_whitespace()).unwrap_or(true);
+        let has_non_space_after = match_end < result_str.len()
+            && !result_str
+                .chars()
+                .nth(match_end)
+                .map(|c| c.is_whitespace())
+                .unwrap_or(true);
 
         // If closing $ has space before it AND non-space after it, skip normalization (not math)
         if has_space_before_closing && has_non_space_after {
@@ -370,16 +1118,21 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 }
 
 fn normalize_emoji_name(name: &str) -> String {
-    name.trim_matches(':')
-        .to_lowercase()
-        .replace('-', "_")
+    name.trim_matches(':').to_lowercase().replace('-', "_")
 }
 
-fn find_best_emoji_match(name: &str, max_distance: usize, valid_set: &HashSet<&str>) -> Option<&'static str> {
+fn find_best_emoji_match(
+    name: &str,
+    max_distance: usize,
+    valid_set: &HashSet<&str>,
+) -> Option<&'static str> {
     let normalized = normalize_emoji_name(name);
 
     if valid_set.contains(normalized.as_str()) {
-        return VALID_EMOJI_NAMES.iter().find(|&&n| n == normalized).copied();
+        return VALID_EMOJI_NAMES
+            .iter()
+            .find(|&&n| n == normalized)
+            .copied();
     }
 
     let mut candidates: Vec<(usize, usize, &str)> = Vec::new();
@@ -473,43 +1226,51 @@ fn normalize_bold_italic(line: &str) -> String {
 
     // Helper to check if a position is in a protected region
     let is_protected = |pos: usize| -> bool {
-        merged.iter().any(|(start, end)| pos >= *start && pos < *end)
+        merged
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
     };
 
     let mut result = line.to_string();
 
     // Triple asterisks: ***text*** → __*text*__
     let re1 = Regex::new(r"\*\*\*([^*]+?)\*\*\*").unwrap();
-    result = re1.replace_all(&result, |caps: &regex::Captures| {
-        let full_match = caps.get(0).unwrap();
-        if is_protected(full_match.start()) {
-            full_match.as_str().to_string()
-        } else {
-            format!("__*{}*__", &caps[1])
-        }
-    }).to_string();
+    result = re1
+        .replace_all(&result, |caps: &regex::Captures| {
+            let full_match = caps.get(0).unwrap();
+            if is_protected(full_match.start()) {
+                full_match.as_str().to_string()
+            } else {
+                format!("__*{}*__", &caps[1])
+            }
+        })
+        .to_string();
 
     // Bold-italic nested: **_text_** → __*text*__
     let re2 = Regex::new(r"\*\*_([^_]+?)_\*\*").unwrap();
-    result = re2.replace_all(&result, |caps: &regex::Captures| {
-        let full_match = caps.get(0).unwrap();
-        if is_protected(full_match.start()) {
-            full_match.as_str().to_string()
-        } else {
-            format!("__*{}*__", &caps[1])
-        }
-    }).to_string();
+    result = re2
+        .replace_all(&result, |caps: &regex::Captures| {
+            let full_match = caps.get(0).unwrap();
+            if is_protected(full_match.start()) {
+                full_match.as_str().to_string()
+            } else {
+                format!("__*{}*__", &caps[1])
+            }
+        })
+        .to_string();
 
     // Italic-bold nested: _**text**_ → *__text__*
     let re3 = Regex::new(r"_(\*\*[^*]+?\*\*)_").unwrap();
-    result = re3.replace_all(&result, |caps: &regex::Captures| {
-        let full_match = caps.get(0).unwrap();
-        if is_protected(full_match.start()) {
-            full_match.as_str().to_string()
-        } else {
-            format!("*{}*", &caps[1])
-        }
-    }).to_string();
+    result = re3
+        .replace_all(&result, |caps: &regex::Captures| {
+            let full_match = caps.get(0).unwrap();
+            if is_protected(full_match.start()) {
+                full_match.as_str().to_string()
+            } else {
+                format!("*{}*", &caps[1])
+            }
+        })
+        .to_string();
 
     // Rebuild protected regions from current result (positions may have shifted)
     let mut protected_ranges_result: Vec<(usize, usize)> = Vec::new();
@@ -533,7 +1294,9 @@ fn normalize_bold_italic(line: &str) -> String {
         }
     }
     let is_protected_result = |pos: usize| -> bool {
-        merged_result.iter().any(|(start, end)| pos >= *start && pos < *end)
+        merged_result
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
     };
 
     // Bold with ** → __ (avoid matching *** or **_)
@@ -597,7 +1360,9 @@ fn normalize_bold_italic(line: &str) -> String {
         }
     }
     let is_protected_result2 = |pos: usize| -> bool {
-        merged_result2.iter().any(|(start, end)| pos >= *start && pos < *end)
+        merged_result2
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
     };
 
     // Italics with _ → * (avoid matching __ or **_)
@@ -741,7 +1506,11 @@ fn normalize_table_formatting(table_lines: &[String]) -> Option<Vec<String>> {
         let ends = if cell.is_empty() {
             String::new()
         } else {
-            format!("{}{}", cell.chars().next().unwrap_or(' '), cell.chars().last().unwrap_or(' '))
+            format!(
+                "{}{}",
+                cell.chars().next().unwrap_or(' '),
+                cell.chars().last().unwrap_or(' ')
+            )
         };
         if ends == "::" {
             justify.push("::");
@@ -829,7 +1598,12 @@ fn normalize_table_formatting(table_lines: &[String]) -> Option<Vec<String>> {
             .map(|(j, n)| {
                 let j_str = *j;
                 let dashes = n.saturating_sub(2);
-                format!("{}{}{}", &j_str[0..1], "-".repeat(dashes), &j_str[j_str.len()-1..])
+                format!(
+                    "{}{}{}",
+                    &j_str[0..1],
+                    "-".repeat(dashes),
+                    &j_str[j_str.len() - 1..]
+                )
             })
             .collect::<Vec<_>>()
             .join("|")
@@ -904,7 +1678,11 @@ fn spaces_to_tabs_for_list(line: &str, indent_unit: usize) -> String {
         let marker_space = caps.get(3).unwrap().as_str();
         let content = caps.get(4).unwrap().as_str();
 
-        let marker_space = if marker_space != " " { " " } else { marker_space };
+        let marker_space = if marker_space != " " {
+            " "
+        } else {
+            marker_space
+        };
 
         if indent.contains('\t') {
             return line.to_string();
@@ -984,7 +1762,9 @@ fn normalize_list_markers(
     list_context_stack.retain(|ctx| ctx.level <= current_level);
 
     // Check if we have a context for this exact level
-    let matching_context_idx = list_context_stack.iter().rposition(|ctx| ctx.level == current_level);
+    let matching_context_idx = list_context_stack
+        .iter()
+        .rposition(|ctx| ctx.level == current_level);
 
     let new_marker = if let Some(idx) = matching_context_idx {
         // Continue existing list at this level
@@ -994,13 +1774,11 @@ fn normalize_list_markers(
                 ctx.current_number = Some(ctx.current_number.unwrap_or(0) + 1);
                 format!("{}.", ctx.current_number.unwrap())
             }
-            ListType::Bulleted => {
-                match current_level {
-                    0 => "*".to_string(),
-                    1 => "-".to_string(),
-                    _ => "+".to_string(),
-                }
-            }
+            ListType::Bulleted => match current_level {
+                0 => "*".to_string(),
+                1 => "-".to_string(),
+                _ => "+".to_string(),
+            },
         }
     } else {
         // New list at this level
@@ -1040,7 +1818,6 @@ fn normalize_list_markers(
         format!("{}{}{}{}", indent, new_marker, marker_space, content)
     };
 
-
     (normalized, changed)
 }
 
@@ -1067,8 +1844,8 @@ fn should_preserve_line(line: &str) -> bool {
     is_code_block(line)
         || stripped.starts_with('#')
         || is_horizontal_rule(line)
-        || stripped.contains('|')  // Tables should not be wrapped
-        // Note: blank lines are NOT preserved here - they go through blank line compression
+        || stripped.contains('|') // Tables should not be wrapped
+                                  // Note: blank lines are NOT preserved here - they go through blank line compression
 }
 
 fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
@@ -1263,7 +2040,8 @@ fn init_config_file(force: bool, local: bool) -> Option<PathBuf> {
     }
 
     // Generate config with all rules enabled
-    let all_rules: Vec<String> = LINTING_RULES.iter()
+    let all_rules: Vec<String> = LINTING_RULES
+        .iter()
         .map(|r| r.keyword.to_string())
         .collect();
 
@@ -1316,7 +2094,9 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                         skip_rules.remove(&7);
                     } else if item == "display-math-newlines" {
                         skip_rules.remove(&21);
-                    } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                    } else if let Some(rule) =
+                        LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
+                    {
                         skip_rules.remove(&rule.num);
                     } else if let Ok(rule_num) = item.parse::<u8>() {
                         if LINTING_RULES.iter().any(|r| r.num == rule_num) {
@@ -1334,7 +2114,8 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                     skip_rules.insert(7);
                 } else if item == "display-math-newlines" {
                     skip_rules.insert(21);
-                } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
+                {
                     skip_rules.insert(rule.num);
                 } else if let Ok(rule_num) = item.parse::<u8>() {
                     if LINTING_RULES.iter().any(|r| r.num == rule_num) {
@@ -1353,7 +2134,9 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                         skip_rules.remove(&7);
                     } else if item == "display-math-newlines" {
                         skip_rules.remove(&21);
-                    } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+                    } else if let Some(rule) =
+                        LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
+                    {
                         skip_rules.remove(&rule.num);
                     } else if let Ok(rule_num) = item.parse::<u8>() {
                         if LINTING_RULES.iter().any(|r| r.num == rule_num) {
@@ -1376,8 +2159,8 @@ fn process_file(
     skip_em_dash: bool,
     skip_guillemet: bool,
 ) -> Result<bool, String> {
-    let content = fs::read_to_string(filepath)
-        .map_err(|e| format!("Error reading {}: {}", filepath, e))?;
+    let content =
+        fs::read_to_string(filepath).map_err(|e| format!("Error reading {}: {}", filepath, e))?;
 
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
     let mut output: Vec<String> = Vec::new();
@@ -1554,7 +2337,8 @@ fn process_file(
                 i += 1;
                 continue;
             } else if in_math_block {
-                let is_first_line = !output.is_empty() && output[output.len() - 1].trim_end() == "$$";
+                let is_first_line =
+                    !output.is_empty() && output[output.len() - 1].trim_end() == "$$";
                 let is_last_line = i + 1 < lines.len() && lines[i + 1].trim() == "$$";
 
                 if is_first_line {
@@ -1731,7 +2515,9 @@ fn process_file(
             if let Some(caps) = re_current_orig.captures(line_no_nl) {
                 let current_indent_str = caps.get(1).unwrap().as_str();
                 let current_marker_orig = caps.get(2).unwrap().as_str();
-                let current_is_numbered_orig = Regex::new(r"^\d+\.$").unwrap().is_match(current_marker_orig);
+                let current_is_numbered_orig = Regex::new(r"^\d+\.$")
+                    .unwrap()
+                    .is_match(current_marker_orig);
 
                 // Check previous output line (skip blank lines)
                 let mut prev_line: Option<&String> = None;
@@ -1742,7 +2528,6 @@ fn process_file(
                     }
                 }
 
-
                 if let Some(prev) = prev_line {
                     if is_list_item(prev) {
                         let prev_no_nl = prev.trim_end_matches('\n');
@@ -1750,16 +2535,21 @@ fn process_file(
                         if let Some(prev_caps) = re_prev.captures(prev_no_nl) {
                             let prev_indent_str = prev_caps.get(1).unwrap().as_str();
                             let prev_marker = prev_caps.get(2).unwrap().as_str();
-                            let prev_is_numbered = Regex::new(r"^\d+\.$").unwrap().is_match(prev_marker);
+                            let prev_is_numbered =
+                                Regex::new(r"^\d+\.$").unwrap().is_match(prev_marker);
 
                             // Compare normalized indentation levels, not raw character counts
-                            let indent_unit = current_list_indent_unit.unwrap_or_else(|| detect_list_indent_unit(&lines, i));
+                            let indent_unit = current_list_indent_unit
+                                .unwrap_or_else(|| detect_list_indent_unit(&lines, i));
                             let prev_level = get_list_level(prev_indent_str, indent_unit);
                             let current_level = get_list_level(current_indent_str, indent_unit);
 
                             // If same level and marker type changed (bullet <-> numbered): split the list
                             // BUT only at top-level (level 0) - nested lists should just convert markers
-                            if prev_level == current_level && prev_is_numbered != current_is_numbered_orig && current_level == 0 {
+                            if prev_level == current_level
+                                && prev_is_numbered != current_is_numbered_orig
+                                && current_level == 0
+                            {
                                 // Remove context for this level so the new list type starts fresh
                                 let interrupt_level = current_level;
                                 list_context_stack.retain(|ctx| ctx.level != interrupt_level);
@@ -1777,14 +2567,20 @@ fn process_file(
             // Normalize list markers (renumber ordered lists, standardize bullet markers)
             // Do this before converting spaces to tabs so level calculation works correctly
             if !skip_rules.contains(&26) {
-                let indent_unit = current_list_indent_unit.unwrap_or_else(|| detect_list_indent_unit(&lines, i));
+                let indent_unit =
+                    current_list_indent_unit.unwrap_or_else(|| detect_list_indent_unit(&lines, i));
 
                 // Don't clear list context on blank lines - blank lines are allowed within lists in CommonMark
                 // Only clear if the next non-blank line after a blank line is NOT a list item or is at a different level
                 // This is handled when we encounter non-list elements (paragraphs, headings, etc.)
 
                 let skip_list_reset = skip_rules.contains(&27);
-                let (normalized_line, marker_changed) = normalize_list_markers(&line, &mut list_context_stack, indent_unit, skip_list_reset);
+                let (normalized_line, marker_changed) = normalize_list_markers(
+                    &line,
+                    &mut list_context_stack,
+                    indent_unit,
+                    skip_list_reset,
+                );
                 // Always use normalized_line to ensure context stack is updated correctly
                 line = normalized_line;
                 if marker_changed {
@@ -1848,7 +2644,11 @@ fn process_file(
                         for (j, wrapped_line) in wrapped.iter().enumerate() {
                             if j > 0 {
                                 let cont_indent = " ".repeat(prefix.chars().count());
-                                let cont_line = format!("{}{}", cont_indent, &wrapped_line[prefix.chars().count()..]);
+                                let cont_line = format!(
+                                    "{}{}",
+                                    cont_indent,
+                                    &wrapped_line[prefix.chars().count()..]
+                                );
                                 output.push(format!("{}\n", cont_line));
                             } else {
                                 output.push(format!("{}\n", wrapped_line));
@@ -1928,7 +2728,8 @@ fn process_file(
                     let wrapped = wrap_text(content, wrap_width, &format!("{} ", prefix));
                     for (j, wrapped_line) in wrapped.iter().enumerate() {
                         if j > 0 {
-                            let cont_line = format!("{} {}", prefix, &wrapped_line[(prefix.len() + 1)..]);
+                            let cont_line =
+                                format!("{} {}", prefix, &wrapped_line[(prefix.len() + 1)..]);
                             output.push(format!("{}\n", cont_line));
                         } else {
                             output.push(format!("{}\n", wrapped_line));
@@ -2198,11 +2999,23 @@ Examples:
         let local_config = PathBuf::from(".md-fixup");
         if local_config.exists() {
             if !atty::is(atty::Stream::Stdin) {
-                eprintln!("Config file already exists at: {}", local_config.canonicalize().unwrap_or(local_config.clone()).display());
+                eprintln!(
+                    "Config file already exists at: {}",
+                    local_config
+                        .canonicalize()
+                        .unwrap_or(local_config.clone())
+                        .display()
+                );
                 eprintln!("Refusing to overwrite config in non-interactive mode.");
                 std::process::exit(1);
             }
-            eprintln!("Config file already exists at: {}", local_config.canonicalize().unwrap_or(local_config.clone()).display());
+            eprintln!(
+                "Config file already exists at: {}",
+                local_config
+                    .canonicalize()
+                    .unwrap_or(local_config.clone())
+                    .display()
+            );
             eprint!("Overwrite existing config file? [y/N]: ");
             use std::io::Write;
             io::stderr().flush().ok();
@@ -2219,7 +3032,13 @@ Examples:
         }
         match init_config_file(true, true) {
             Some(config_file) => {
-                eprintln!("Created local config file at: {}", config_file.canonicalize().unwrap_or(config_file.clone()).display());
+                eprintln!(
+                    "Created local config file at: {}",
+                    config_file
+                        .canonicalize()
+                        .unwrap_or(config_file.clone())
+                        .display()
+                );
                 eprintln!("Edit this file to customize which rules are enabled.");
                 std::process::exit(0);
             }
@@ -2248,8 +3067,8 @@ Examples:
         .copied()
         .or_else(|| config.as_ref().and_then(|c| c.width))
         .unwrap_or(DEFAULT_WRAP_WIDTH);
-    let overwrite = matches.get_flag("overwrite")
-        || config.as_ref().and_then(|c| c.overwrite).unwrap_or(false);
+    let overwrite =
+        matches.get_flag("overwrite") || config.as_ref().and_then(|c| c.overwrite).unwrap_or(false);
 
     // Start with config skip_rules, then merge CLI skip rules
     let mut skip_rules = if let Some(ref cfg) = config {
@@ -2314,8 +3133,8 @@ Examples:
                 }
             } else {
                 // Treat as markdown content - process directly
-                use tempfile::NamedTempFile;
                 use std::io::Write;
+                use tempfile::NamedTempFile;
 
                 let mut tmp = match NamedTempFile::new() {
                     Ok(t) => t,
@@ -2340,7 +3159,14 @@ Examples:
                 let tmp_path_obj = tmp.into_temp_path();
                 let tmp_path = tmp_path_obj.to_string_lossy().to_string();
 
-                match process_file(&tmp_path, wrap_width, false, &skip_rules, skip_em_dash, skip_guillemet) {
+                match process_file(
+                    &tmp_path,
+                    wrap_width,
+                    false,
+                    &skip_rules,
+                    skip_em_dash,
+                    skip_guillemet,
+                ) {
                     Ok(_) => {
                         // process_file already printed to stdout when overwrite=false
                         // tmp_path_obj will be automatically deleted when dropped
@@ -2460,7 +3286,10 @@ mod tests {
         // Nested lists should be renumbered independently
         assert!(output.contains("1. Nested first") || output.contains("\t1. Nested first"));
         assert!(output.contains("2. Nested third") || output.contains("\t2. Nested third"));
-        assert!(output.contains("1. Another nested first") || output.contains("\t1. Another nested first"));
+        assert!(
+            output.contains("1. Another nested first")
+                || output.contains("\t1. Another nested first")
+        );
     }
 
     #[test]
@@ -2477,7 +3306,8 @@ mod tests {
 
     #[test]
     fn test_interrupted_list_reverse() {
-        let input = "* First bullet\n- Second bullet\n+ Third bullet\n1. An interrupted numbered list\n";
+        let input =
+            "* First bullet\n- Second bullet\n+ Third bullet\n1. An interrupted numbered list\n";
         let output = process_test_content(input);
         assert!(output.contains("<!-- -->"));
         assert!(output.contains("1. An interrupted numbered list"));
@@ -2515,15 +3345,26 @@ mod tests {
         assert!(output.contains("1. List item 1"));
         // "1. Back to the root" should become "2. Back to the root"
         // Output clearly shows "2. Back to the root", check flexibly for tabs/spaces
-        assert!(output.contains("Back to the root"), "Missing 'Back to the root': {}", output);
+        assert!(
+            output.contains("Back to the root"),
+            "Missing 'Back to the root': {}",
+            output
+        );
         // Verify renumbering happened - check for "2." pattern (may have tabs before it)
         let re = Regex::new(r"2\.").unwrap();
         let count = re.find_iter(&output).count();
-        assert!(count >= 2, "Expected at least 2 instances of '2.', found {}, output: {}", count, output);
+        assert!(
+            count >= 2,
+            "Expected at least 2 instances of '2.', found {}, output: {}",
+            count,
+            output
+        );
         assert!(output.contains("3. what?"));
 
         // Check nested items (spaces converted to tabs)
-        assert!(output.contains("1. Testing something") || output.contains("\t\t1. Testing something"));
+        assert!(
+            output.contains("1. Testing something") || output.contains("\t\t1. Testing something")
+        );
         assert!(output.contains("2. Else") || output.contains("\t\t2. Else"));
 
         // Check interruption
@@ -2559,7 +3400,10 @@ mod tests {
         let output = process_test_content_with_width(input, 20);
 
         // Table should be preserved - each row should be on a single line
-        let table_lines: Vec<&str> = output.lines().filter(|line| line.contains('|') && !line.trim().is_empty()).collect();
+        let table_lines: Vec<&str> = output
+            .lines()
+            .filter(|line| line.contains('|') && !line.trim().is_empty())
+            .collect();
 
         // All table lines should be single lines (not wrapped)
         for line in &table_lines {

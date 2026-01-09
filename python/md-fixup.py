@@ -27,6 +27,10 @@ Markdown linter that:
 24. Normalizes typography (curly quotes to straight, en/em dashes, ellipses, guillemets)
 25. Normalizes bold/italic markers (bold: always __, italic: always *)
 26. Normalizes list markers (renumbers ordered lists, standardizes bullet markers by level)
+27. Resets ordered lists to start at 1 (if disabled, preserves starting number)
+28. Converts links to numeric reference links
+29. Places link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)
+30. Converts links to inline format (overrides reference-links if enabled)
 
 Table cleanup script: Dr. Drang <https://leancrew.com/>
 """
@@ -42,7 +46,7 @@ try:
 except ImportError:
     yaml = None
 
-VERSION = "0.1.17"
+VERSION = "0.1.18"
 DEFAULT_WRAP_WIDTH = 60
 
 # Valid GitHub emoji names (normalized: lowercase, hyphens to underscores, sorted, deduplicated)
@@ -1266,13 +1270,13 @@ def normalize_typography(line, skip_em_dash=False, skip_guillemet=False):
 
     return result
 
-def normalize_bold_italic(line):
+def normalize_bold_italic(line, reverse_emphasis=False):
     """Normalize bold and italic markers
 
-    - Bold: always use __ (not **)
-    - Italics: always use * (not _)
-    - Handle nested: **_text_** → __*text*__
-    - Handle triple: ***text*** → __*text*__
+    - Bold: always use __ (not **), or reversed: ** (not __)
+    - Italics: always use * (not _), or reversed: _ (not *)
+    - Handle nested: **_text_** → __*text*__ (or reversed: *__text__* → _**text**_)
+    - Handle triple: ***text*** → __*text*__ (or reversed: ___text___ → **text**)
     - Skip inside code spans, code blocks, and emoji markers
     """
     # First, identify protected regions (code spans, emoji markers)
@@ -1313,44 +1317,97 @@ def normalize_bold_italic(line):
 
     result = line
 
-    # Handle nested cases first (most specific patterns)
-    # We need to process these manually to check protected regions
+    if reverse_emphasis:
+        # Reversed: ** for bold, _ for italic
+        # Handle ALL bold-italic combinations first (before standalone patterns)
+        # All should normalize to: _**text**_
 
-    # Triple asterisks: ***text*** → __*text*__
-    def replace_triple(match):
-        if is_protected(match.start()):
-            return match.group(0)
-        return f'__*{match.group(1)}*__'
-    result = re.sub(r'\*\*\*([^*]+?)\*\*\*', replace_triple, result)
+        # General approach: match any 3-marker combo and normalize to _**text**_
+        def normalize_bold_italic_reverse_general(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            opening = match.group(1)
+            content = match.group(2)
+            closing = match.group(3)
 
-    # Bold-italic nested: **_text_** → __*text*__
-    def replace_bold_italic_nested(match):
-        if is_protected(match.start()):
-            return match.group(0)
-        return f'__*{match.group(1)}*__'
-    result = re.sub(r'\*\*_([^_]+?)_\*\*', replace_bold_italic_nested, result)
+            # Verify closing is reverse of opening
+            expected_closing = opening[::-1]
+            if closing != expected_closing:
+                return match.group(0)
 
-    # Italic-bold nested: _**text**_ → *__text__*
-    def replace_italic_bold_nested(match):
-        if is_protected(match.start()):
-            return match.group(0)
-        return f'*{match.group(1)}*'
-    result = re.sub(r'_(\*\*[^*]+?\*\*)_', replace_italic_bold_nested, result)
+            # Normalize to _**content**_
+            return f'_**{content}**_'
 
-    # Now handle standalone bold and italic
-    # Bold with ** → __
-    def replace_bold(match):
-        if is_protected(match.start()):
-            return match.group(0)
-        return f'__{match.group(1)}__'
-    result = re.sub(r'(?<!\*)\*\*([^*]+?)\*\*(?!\*)', replace_bold, result)
+        # Match any 3 markers + content + any 3 markers, verify balanced
+        result = re.sub(r'([_*]{3})(.+?)([_*]{3})', normalize_bold_italic_reverse_general, result)
 
-    # Italics with _ → *
-    def replace_italic(match):
-        if is_protected(match.start()):
-            return match.group(0)
-        return f'*{match.group(1)}*'
-    result = re.sub(r'(?<!_)_([^_]+?)_(?!_)', replace_italic, result)
+        # Now handle standalone bold and italic
+        # Bold with __ → **
+        def replace_bold_rev(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            return f'**{match.group(1)}**'
+        result = re.sub(r'(?<!_)__([^_]+?)__(?!_)', replace_bold_rev, result)
+
+        # Italics with * → _
+        def replace_italic_rev(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            return f'_{match.group(1)}_'
+        result = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', replace_italic_rev, result)
+    else:
+        # Normal: __ for bold, * for italic
+        # Handle ALL bold-italic combinations first (before standalone patterns)
+        # All should normalize to: __*text*__
+        # A bold-italic combo has exactly 3 markers total (any combination of _ and *)
+
+        # General approach: match any 3-character combination of _ and * at start,
+        # then content (non-greedy), then verify closing markers are reverse of opening
+        def normalize_bold_italic_general(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            # Group 1: opening markers (3 chars of _ and *)
+            # Group 2: content
+            # Group 3: closing markers
+            opening = match.group(1)
+            content = match.group(2)
+            closing = match.group(3)
+
+            # Verify closing is reverse of opening (ensures balanced bold-italic combo)
+            expected_closing = opening[::-1]
+            if closing != expected_closing:
+                # Not a valid bold-italic combo (e.g., ***text___), return original
+                return match.group(0)
+
+            # Normalize to __*content*__
+            return f'__*{content}*__'
+
+        # Match any 3 markers + content + any 3 markers, then verify they're balanced
+        # Use \S to ensure content starts with non-whitespace (avoids matching across word boundaries incorrectly)
+        # But allow whitespace in the middle of content
+        # Pattern: ([_*]{3})(\S.*?\S)([_*]{3}) - ensures content has at least 2 non-whitespace chars
+        # However, this might be too restrictive. Let's use a simpler approach:
+        # Match any 3 markers, then non-greedy content (at least 1 char), then any 3 markers
+        result = re.sub(r'([_*]{3})(.+?)([_*]{3})', normalize_bold_italic_general, result)
+
+        # Now handle standalone bold and italic
+        # Bold with ** → __
+        # Don't match if followed by _ (that's a nested pattern like **_text_**)
+        def replace_bold(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            return f'__{match.group(1)}__'
+        # Negative lookbehind: not preceded by *
+        # Negative lookahead: not followed by * or _ (to avoid matching nested patterns)
+        # Use .+? instead of [^*]+? to allow * in content (for nested italic)
+        result = re.sub(r'(?<!\*)\*\*(.+?)\*\*(?![*_])', replace_bold, result)
+
+        # Italics with _ → *
+        def replace_italic(match):
+            if is_protected(match.start()):
+                return match.group(0)
+            return f'*{match.group(1)}*'
+        result = re.sub(r'(?<!_)_([^_]+?)_(?!_)', replace_italic, result)
 
     return result
 
@@ -1719,6 +1776,9 @@ def normalize_list_markers(line, list_context_stack, indent_unit=2, skip_list_re
     changed = (marker != new_marker)
 
     # Build new line
+    # Ensure exactly one space after marker for consistency
+    if marker_space != ' ':
+        marker_space = ' '
     has_newline = line.endswith('\n')
     normalized = indent + new_marker + marker_space + content
     if has_newline:
@@ -1756,14 +1816,16 @@ def should_preserve_line(line):
 
 def wrap_text(text, width, prefix=''):
     """Wrap text at width, preserving links and code spans"""
-    if len(text) <= width:
-        return [text]
+    # Always include prefix in the first line
+    full_first_line = prefix + text
+    if len(full_first_line) <= width:
+        return [full_first_line]
 
     # Don't wrap if it contains a long link or code span
     if re.search(r'\[.*?\]\([^)]{20,}\)', text):
-        return [text]
+        return [full_first_line]
     if re.search(r'`[^`]{20,}`', text):
-        return [text]
+        return [full_first_line]
 
     words = text.split()
     lines = []
@@ -1782,7 +1844,7 @@ def wrap_text(text, width, prefix=''):
     if current_line != prefix:
         lines.append(current_line)
 
-    return lines if lines else [text]
+    return lines if lines else [full_first_line]
 
 # Define linting rules (numbered for --skip flag)
 LINTING_RULES = {
@@ -1813,12 +1875,439 @@ LINTING_RULES = {
     25: ("Normalize bold/italic markers (bold: __, italic: *)", "bold-italic"),
     26: ("Normalize list markers (renumber ordered lists, standardize bullet markers by level)", "list-markers"),
     27: ("Reset ordered lists to start at 1 (if disabled, preserve starting number)", "list-reset"),
+    28: ("Convert links to numeric reference links", "reference-links"),
+    29: ("Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)", "links-at-end"),
+    30: ("Convert links to inline format (overrides reference-links if enabled)", "inline-links"),
 }
 
 # Create keyword to rule number mapping
 KEYWORD_TO_RULE = {desc[1]: num for num, desc in LINTING_RULES.items()}
+# Add alias for emphasis
+KEYWORD_TO_RULE['emphasis'] = 25
 
-def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_string=None):
+def get_top_level_element_end(lines, start_idx):
+    """Find the end of a top-level element (paragraph, list, etc.)
+
+    Returns the index of the last line of the element (inclusive)
+    For nested lists, finds the end of the top-level list, not the nested item.
+    """
+    if start_idx >= len(lines):
+        return start_idx
+
+    line = lines[start_idx]
+    stripped = line.strip()
+
+    # Empty line ends a paragraph
+    if not stripped:
+        return start_idx
+
+    # Headline
+    if is_headline(line):
+        return start_idx
+
+    # List item - find end of top-level list
+    if is_list_item(line):
+        current_indent = len(line) - len(line.lstrip())
+
+        # If nested, find top-level list start
+        if current_indent > 0:
+            top_level_start = start_idx
+            for i in range(start_idx, -1, -1):
+                if i < 0:
+                    break
+                prev_line = lines[i]
+                if not is_list_item(prev_line):
+                    top_level_start = i + 1
+                    break
+                prev_indent = len(prev_line) - len(prev_line.lstrip())
+                if prev_indent == 0:
+                    top_level_start = i
+                    break
+        else:
+            top_level_start = start_idx
+
+        # Find end of top-level list
+        i = top_level_start
+        last_top_level_item = top_level_start
+
+        while i < len(lines):
+            current = lines[i]
+            if not current.strip():
+                # Blank line - check if list continues
+                if i + 1 < len(lines) and is_list_item(lines[i + 1]):
+                    next_line = lines[i + 1]
+                    next_indent = len(next_line) - len(next_line.lstrip())
+                    if next_indent == 0:
+                        i += 1
+                        continue
+                    i += 1
+                    continue
+                return last_top_level_item
+
+            if is_list_item(current):
+                current_indent = len(current) - len(current.lstrip())
+                if current_indent == 0:
+                    last_top_level_item = i
+                i += 1
+                continue
+
+            # Non-list line - check if indented continuation
+            if current.strip().startswith('\t') or (current.strip().startswith(' ') and len(current) - len(current.lstrip()) > 0):
+                i += 1
+                continue
+
+            # Non-list, non-indented line ends the list
+            return last_top_level_item
+
+        return last_top_level_item
+
+    # Blockquote - find end of blockquote
+    if is_blockquote(line):
+        i = start_idx + 1
+        while i < len(lines):
+            current = lines[i]
+            if not current.strip():
+                if i + 1 < len(lines) and is_blockquote(lines[i + 1]):
+                    i += 1
+                    continue
+                return i - 1
+            if is_blockquote(current):
+                i += 1
+                continue
+            return i - 1
+        return len(lines) - 1
+
+    # Paragraph - ends at blank line or other block element
+    i = start_idx + 1
+    while i < len(lines):
+        current = lines[i]
+        if not current.strip():
+            return i - 1
+        if (is_headline(current) or is_list_item(current) or
+            is_code_block(current) or is_horizontal_rule(current) or
+            is_blockquote(current)):
+            return i - 1
+        i += 1
+    return len(lines) - 1
+
+def convert_links_in_document(lines, use_inline, use_reference, place_at_beginning):
+    """Convert all links in the document using approach similar to formd gist
+
+    Based on: https://gist.github.com/ttscoff/3907181
+    """
+    if not use_inline and not use_reference:
+        return lines
+
+    # Make a copy to avoid modifying the original during iteration
+    lines = list(lines)
+
+    # First, collect all existing reference definitions
+    # Pattern: [id]: url or [id]: url "title"
+    ref_def_pattern = re.compile(r'^(\[[^\]]+\])\s*:\s*(.+)$')
+    ref_definitions = {}  # Maps ref_id -> (url, title)
+    ref_def_lines = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        match = ref_def_pattern.match(stripped)
+        if match:
+            ref_id = match.group(1)
+            url_part = match.group(2).strip()
+
+            # Extract URL and optional title
+            url_match = re.match(r'^([^\s"]+)(?:\s+"([^"]+)")?$', url_part)
+            if url_match:
+                url = url_match.group(1)
+                title = url_match.group(2) if url_match.group(2) else None
+            else:
+                url = url_part
+                title = None
+
+            ref_definitions[ref_id] = (url, title)
+            # Also store normalized version for implicit links
+            if ref_id.startswith('[') and ref_id.endswith(']'):
+                ref_text = ref_id[1:-1].lower().strip()
+                normalized_id = f'[{ref_text}]'
+                if normalized_id != ref_id:
+                    ref_definitions[normalized_id] = (url, title)
+            ref_def_lines.append(i)
+
+    # Remove reference definition lines
+    for line_idx in reversed(ref_def_lines):
+        lines.pop(line_idx)
+
+    # Now find all links in the document
+    # Pattern similar to gist: [text][ref] or [text](url)
+    match_links = re.compile(r'(\[.*?\])\s?(\[.*?\]|\(.*?\))', re.DOTALL)
+
+    # Track code block state
+    in_code_block = False
+
+    # Helper to check if position is in code span
+    def is_in_code_span(text, pos):
+        before = text[:pos]
+        backticks = 0
+        i = 0
+        while i < len(before):
+            if before[i] == '`':
+                backticks += 1
+                while i + 1 < len(before) and before[i + 1] == '`':
+                    i += 1
+                    backticks += 1
+                i += 1
+            elif before[i] == '\\':
+                i += 2
+            else:
+                i += 1
+        return backticks % 2 == 1
+
+    # Collect all links with their positions and URLs
+    link_data = []  # List of (line_idx, match_start, match_end, link_text, url, title)
+
+    for i, line in enumerate(lines):
+        # Track code blocks
+        if is_code_block(line):
+            in_code_block = not in_code_block
+            continue
+
+        if in_code_block:
+            continue
+
+        # Track positions we've already matched to avoid duplicates
+        matched_positions = set()
+
+        # Find inline links: [text](url) or [text](url "title")
+        inline_pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+        for match in inline_pattern.finditer(line):
+            if is_in_code_span(line, match.start()):
+                continue
+            # Check if this position overlaps with a previously matched link
+            pos_key = (i, match.start(), match.end())
+            if pos_key in matched_positions:
+                continue
+            matched_positions.add(pos_key)
+
+            link_text = match.group(1)
+            url_part = match.group(2)
+
+            # Extract URL and title
+            url_match = re.match(r'^([^\s"]+)(?:\s+"([^"]+)")?$', url_part)
+            if url_match:
+                url = url_match.group(1)
+                title = url_match.group(2)
+            else:
+                url = url_part
+                title = None
+
+            link_data.append((i, match.start(), match.end(), link_text, url, title))
+
+        # Find reference links: [text][ref]
+        ref_pattern = re.compile(r'\[([^\]]+)\]\[([^\]]+)\]')
+        for match in ref_pattern.finditer(line):
+            if is_in_code_span(line, match.start()):
+                continue
+            # Check if this position overlaps with a previously matched link
+            pos_key = (i, match.start(), match.end())
+            if pos_key in matched_positions:
+                continue
+            matched_positions.add(pos_key)
+
+            link_text = match.group(1)
+            ref_id = match.group(2)
+
+            # Look up URL from definitions
+            ref_key = f'[{ref_id}]'
+            if ref_key in ref_definitions:
+                url, title = ref_definitions[ref_key]
+                link_data.append((i, match.start(), match.end(), link_text, url, title))
+
+        # Find implicit reference links: [text] (without explicit ref)
+        # But only if it's not already part of a reference or inline link we found above
+        implicit_pattern = re.compile(r'\[([^\]]+)\](?![\[\(])')
+        for match in implicit_pattern.finditer(line):
+            if is_in_code_span(line, match.start()):
+                continue
+            # Check if this position overlaps with a previously matched link
+            already_covered = False
+            for existing_line_idx, existing_start, existing_end in [(p[0], p[1], p[2]) for p in matched_positions if p[0] == i]:
+                if existing_start <= match.start() < existing_end:
+                    already_covered = True
+                    break
+            if already_covered:
+                continue
+
+            link_text = match.group(1)
+            ref_id_normalized = f'[{link_text.lower().strip()}]'
+
+            if ref_id_normalized in ref_definitions:
+                url, title = ref_definitions[ref_id_normalized]
+                pos_key = (i, match.start(), match.end())
+                matched_positions.add(pos_key)
+                link_data.append((i, match.start(), match.end(), link_text, url, title))
+
+    # Convert links based on mode
+    if use_inline:
+        # Convert all to inline format
+        for line_idx, start, end, link_text, url, title in reversed(link_data):
+            line = lines[line_idx]
+            if title:
+                replacement = f'[{link_text}]({url} "{title}")'
+            else:
+                replacement = f'[{link_text}]({url})'
+            lines[line_idx] = line[:start] + replacement + line[end:]
+
+    elif use_reference:
+        # Assign reference numbers in document order
+        url_to_ref = {}  # Maps (url, title) -> ref_num
+        next_ref = 1
+
+        for line_idx, start, end, link_text, url, title in link_data:
+            url_key = (url, title)
+            if url_key not in url_to_ref:
+                url_to_ref[url_key] = next_ref
+                next_ref += 1
+
+        # Replace links with numeric references (process in reverse to maintain positions)
+        # Group links by line and sort by position (right to left for replacement)
+        # Use a set to track unique links by (line_idx, start, end) to avoid duplicates
+        links_by_line = {}
+        seen_links = set()  # Track (line_idx, start, end) to avoid duplicates
+        for line_idx, start, end, link_text, url, title in link_data:
+            link_key = (line_idx, start, end)
+            if link_key in seen_links:
+                continue  # Skip duplicate links
+            seen_links.add(link_key)
+
+            if line_idx not in links_by_line:
+                links_by_line[line_idx] = []
+            links_by_line[line_idx].append((start, end, link_text, url, title))
+
+        for line_idx in sorted(links_by_line.keys(), reverse=True):
+            line = lines[line_idx]
+            # Sort by start position, descending (right to left)
+            line_links = sorted(links_by_line[line_idx], key=lambda x: x[0], reverse=True)
+
+            # Build new line by replacing from right to left
+            # This ensures positions don't shift as we replace
+            # Track which positions we've already replaced to avoid duplicates
+            replaced_ranges = set()  # Track (start, end) ranges we've replaced
+            new_line = line
+            for start, end, link_text, url, title in line_links:
+                # Skip if we've already replaced this exact range (avoid duplicates)
+                range_key = (start, end)
+                if range_key in replaced_ranges:
+                    continue
+                replaced_ranges.add(range_key)
+
+                url_key = (url, title)
+                ref_num = url_to_ref[url_key]
+                replacement = f'[{link_text}][{ref_num}]'
+                # Replace from right to left to maintain positions
+                # Make sure we're replacing the ENTIRE link, not appending
+                new_line = new_line[:start] + replacement + new_line[end:]
+
+            # Verify that if the original line was a list item, the new line is still a list item
+            # This ensures we don't break list structure during link conversion
+            if is_list_item(line):
+                # Extract the list item structure from the original line
+                orig_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+                if orig_match:
+                    orig_indent = orig_match.group(1)
+                    orig_marker = orig_match.group(2)
+                    orig_marker_space = orig_match.group(3)
+                    orig_content = orig_match.group(4)
+
+                    # Check if the new line is still a valid list item
+                    new_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', new_line)
+                    if not new_match:
+                        # The replacement completely broke the list structure - reconstruct it
+                        # The new_line should have the same content but with links replaced
+                        # We need to extract just the content (without marker/indent) from new_line
+                        # Try to find where the original content started
+                        marker_end_pos = len(orig_indent) + len(orig_marker) + len(orig_marker_space)
+
+                        # If new_line is shorter than marker_end_pos, it means the marker is missing
+                        # In that case, new_line should just be the content
+                        if len(new_line) < marker_end_pos or not new_line[marker_end_pos:].lstrip():
+                            # Marker is missing - new_line is likely just the content
+                            new_content = new_line.lstrip()
+                            # Remove any marker that might be at the start
+                            new_content = re.sub(r'^[-*+]|\d+\.\s*', '', new_content).lstrip()
+                        else:
+                            # Marker might still be there, extract content after it
+                            new_content = new_line[marker_end_pos:].lstrip()
+                            # If there's still a marker in the content, remove it
+                            new_content = re.sub(r'^[-*+]|\d+\.\s*', '', new_content).lstrip()
+
+                        # Reconstruct the line with original structure
+                        new_line = orig_indent + orig_marker + orig_marker_space + new_content
+                        # Preserve newline if original had one
+                        if line.endswith('\n') and not new_line.endswith('\n'):
+                            new_line += '\n'
+                    elif new_match.group(2) != orig_marker:
+                        # Marker changed - restore original marker
+                        new_content = new_match.group(4)
+                        new_line = orig_indent + orig_marker + orig_marker_space + new_content
+                        if line.endswith('\n') and not new_line.endswith('\n'):
+                            new_line += '\n'
+                    else:
+                        # New line is still a valid list item, but verify indentation
+                        new_indent = new_match.group(1)
+                        if orig_indent != new_indent:
+                            # Restore original indentation
+                            new_content = new_match.group(4)
+                            new_line = orig_indent + orig_marker + orig_marker_space + new_content
+                            if line.endswith('\n') and not new_line.endswith('\n'):
+                                new_line += '\n'
+
+            lines[line_idx] = new_line
+
+        # Add reference definitions
+        if place_at_beginning:
+            # Place all definitions at the beginning
+            # Remove any leading blank lines and front matter
+            insert_pos = 0
+            # Skip YAML front matter if present
+            if lines and lines[0].strip() == '---':
+                # Find end of front matter
+                for i in range(1, len(lines)):
+                    if lines[i].strip() == '---':
+                        insert_pos = i + 1
+                        break
+
+            # Ensure blank line after front matter or at start
+            if insert_pos < len(lines) and lines[insert_pos].strip():
+                lines.insert(insert_pos, '\n')
+                insert_pos += 1
+
+            # Add definitions in document order
+            if url_to_ref:
+                for (url, title), ref_num in sorted(url_to_ref.items(), key=lambda x: x[1]):
+                    if title:
+                        lines.insert(insert_pos, f'[{ref_num}]: {url} "{title}"\n')
+                    else:
+                        lines.insert(insert_pos, f'[{ref_num}]: {url}\n')
+                    insert_pos += 1
+
+                # Add blank line after definitions
+                if insert_pos < len(lines) and lines[insert_pos].strip():
+                    lines.insert(insert_pos, '\n')
+        else:
+            # Place all definitions at bottom (default behavior)
+            while lines and not lines[-1].strip():
+                lines.pop()
+
+            if url_to_ref:
+                lines.append('\n')
+                for (url, title), ref_num in sorted(url_to_ref.items(), key=lambda x: x[1]):
+                    if title:
+                        lines.append(f'[{ref_num}]: {url} "{title}"\n')
+                    else:
+                        lines.append(f'[{ref_num}]: {url}\n')
+
+    return lines
+
+def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_string=None, reverse_emphasis=False):
     """Process a single markdown file
 
     Args:
@@ -1827,6 +2316,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
         overwrite: If True, overwrite the file. If False, output to STDOUT.
         skip_rules: Set of rule numbers to skip
         skip_string: Original skip string (for checking sub-keywords like em-dash, guillemet)
+        reverse_emphasis: If True, reverse emphasis markers (__ → ** for bold, * → _ for italic)
 
     Returns:
         True if changes were made, False otherwise
@@ -1935,7 +2425,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
         # Normalize bold/italic markers
         if 25 not in skip_rules:
-            normalized_bold_italic = normalize_bold_italic(line)
+            normalized_bold_italic = normalize_bold_italic(line, reverse_emphasis=reverse_emphasis)
             if normalized_bold_italic != line:
                 line = normalized_bold_italic
                 changes_made = True
@@ -2192,15 +2682,28 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 normalized_line, list_context_stack, marker_changed = normalize_list_markers(
                     line, list_context_stack, current_list_indent_unit, skip_list_reset
                 )
-                if marker_changed:
-                    line = normalized_line
-                    changes_made = True
+                # Always use normalized_line if it's different, even if marker didn't change
+                # This ensures the line structure is consistent
+                if normalized_line != line:
+                    # Verify normalized line is still a valid list item
+                    if is_list_item(normalized_line):
+                        line = normalized_line
+                        changes_made = True
+                    # If normalization broke it, keep original
 
             # Convert list indentation spaces to tabs based on detected unit
             if 12 not in skip_rules:
-                line = spaces_to_tabs_for_list(line, current_list_indent_unit)
-                if line != original_line:
-                    changes_made = True
+                if current_list_indent_unit is None:
+                    # Detect indent unit if not already detected
+                    current_list_indent_unit = detect_list_indent_unit(lines, i)
+                line_before_tabs = line  # Store line before tab conversion for comparison
+                converted_line = spaces_to_tabs_for_list(line, current_list_indent_unit)
+                # Only use converted line if it's still a valid list item
+                if is_list_item(converted_line):
+                    line = converted_line
+                    if line != line_before_tabs:
+                        changes_made = True
+                # If conversion broke the line, keep the original
 
             list_indent = get_list_indent(line)
 
@@ -2224,8 +2727,42 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
             # Process list item content
             # Match with or without space after marker
+            # Note: line should always match since we're inside the is_list_item block
             match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
-            if match:
+            if not match:
+                # Line should match - if it doesn't, something went wrong in processing
+                # Try to recover by checking if it's still a list item
+                if is_list_item(line):
+                    # Still a list item but regex doesn't match - try to fix it
+                    # Extract what we can from the line
+                    stripped = line.lstrip()
+                    # Try to find the marker
+                    marker_match = re.match(r'^([-*+]|\d+\.)', stripped)
+                    if marker_match:
+                        marker = marker_match.group(1)
+                        # Find where content starts (after marker and optional space)
+                        content_start = len(marker_match.group(0))
+                        if content_start < len(stripped) and stripped[content_start] == ' ':
+                            content_start += 1
+                        content = stripped[content_start:] if content_start < len(stripped) else ''
+                        # Reconstruct with proper structure
+                        indent = line[:len(line) - len(stripped)]
+                        marker_space = ' '
+                        line = indent + marker + marker_space + content
+                        if not line.endswith('\n') and original_line.endswith('\n'):
+                            line += '\n'
+                        # Try the match again
+                        match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+                        if not match:
+                            # Still doesn't match - append as-is to avoid data loss
+                            output.append(line)
+                    else:
+                        # Can't find marker - append as-is to avoid data loss
+                        output.append(line)
+                else:
+                    # No longer a list item - this shouldn't happen, but append anyway
+                    output.append(line)
+            else:
                 indent = match.group(1)
                 marker = match.group(2)
                 marker_space = match.group(3)
@@ -2243,18 +2780,25 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                     if len(line.rstrip()) > wrap_width and content:
                         wrapped = wrap_text(content, wrap_width, prefix)
                         for j, wrapped_line in enumerate(wrapped):
-                            if j > 0:
-                                # Continuation lines need extra indentation
-                                cont_indent = ' ' * (len(prefix))
-                                wrapped_line = cont_indent + wrapped_line[len(prefix):]
-                            output.append(wrapped_line + '\n')
+                            if j == 0:
+                                # First line already has prefix from wrap_text
+                                output.append(wrapped_line + '\n')
+                            else:
+                                # Continuation lines need extra indentation to match prefix
+                                # Calculate continuation indent: same as prefix but as spaces
+                                cont_indent = ' ' * len(prefix)
+                                # Remove prefix from wrapped_line (it was added by wrap_text)
+                                if wrapped_line.startswith(prefix):
+                                    content_part = wrapped_line[len(prefix):].lstrip()
+                                else:
+                                    content_part = wrapped_line
+                                # Add continuation indent and content
+                                output.append(cont_indent + content_part + '\n')
                         changes_made = True
                     else:
                         output.append(line)
                 else:
                     output.append(line)
-            else:
-                output.append(line)
 
             # Ensure blank line after list (unless next line is also a list or nested)
             if 9 not in skip_rules:
@@ -2371,6 +2915,34 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 consecutive_blank_lines = 0
 
         i += 1
+
+    # Process link conversions (rules 28, 29, 30)
+    # Rule 30 (inline-links) is disabled by default and overrides rule 28 if enabled
+    # Rule 28 (reference-links) is enabled by default
+    # Rule 29 (links-at-end) is enabled by default - puts links at end
+    # If rule 29 is skipped AND rule 28 is enabled, put links at beginning
+    # If rule 29 is included, rule 28 is included by default
+    # If rule 30 is included, both rule 28 and 29 are skipped
+    if skip_rules is None:
+        skip_rules = set()
+
+    # If inline-links is enabled, skip reference-links and links-at-end
+    use_inline = 30 not in skip_rules
+    if use_inline:
+        skip_rules.add(28)
+        skip_rules.add(29)
+
+    # If links-at-end is included, reference-links is included by default
+    if 29 not in skip_rules:
+        skip_rules.discard(28)  # Enable reference-links if links-at-end is enabled
+
+    use_reference = 28 not in skip_rules and not use_inline
+    # place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
+    place_at_beginning = (29 in skip_rules) and use_reference
+
+    if use_inline or use_reference:
+        output = convert_links_in_document(output, use_inline, use_reference, place_at_beginning)
+        changes_made = True
 
     # Ensure exactly one blank line at end of file
     if 15 not in skip_rules:
@@ -2646,6 +3218,11 @@ Examples:
         help='Initialize a local config file with all rules enabled by name (creates .md-fixup in current directory)'
     )
     parser.add_argument(
+        '--reverse-emphasis',
+        action='store_true',
+        help='Reverse emphasis markers: use ** for bold and _ for italic (instead of __ for bold and * for italic)'
+    )
+    parser.add_argument(
         'files',
         nargs='*',
         metavar='FILE',
@@ -2718,11 +3295,22 @@ Examples:
     files = args.files
 
     # Start with config skip_rules, then merge CLI skip rules
+    # Rule 30 (inline-links) is disabled by default unless explicitly enabled
     skip_rules = config['skip_rules'].copy() if config and config.get('skip_rules') else set()
+    # If no config or rule 30 not explicitly enabled, disable it by default
+    if not config or 30 not in (config.get('skip_rules') or set()):
+        # Check if rule 30 is in the include list (if using skip: all pattern)
+        if config and config.get('rules', {}).get('skip') == 'all':
+            include_list = config.get('rules', {}).get('include', [])
+            if 'inline-links' not in include_list and 30 not in include_list:
+                skip_rules.add(30)  # Disable inline-links by default
+        elif not config:
+            # No config file - disable inline-links by default
+            skip_rules.add(30)
 
     # Parse skip rules from CLI (accepts both numbers and keywords)
     # Also supports sub-keywords: em-dash, guillemet (for typography rule)
-    skip_rules = set()
+    # Note: skip_rules already contains config values, don't reset it
     if args.skip:
         skip_values = [x.strip() for x in args.skip.split(',')]
         for value in skip_values:
@@ -2757,7 +3345,7 @@ Examples:
                     print(f"Error: Invalid keyword: {value}", file=sys.stderr)
                     valid_keywords = ', '.join(
                         sorted(KEYWORD_TO_RULE.keys())
-                        + ['em-dash', 'guillemet', 'code-block-newlines', 'display-math-newlines']
+                        + ['em-dash', 'guillemet', 'code-block-newlines', 'display-math-newlines', 'emphasis']
                     )
                     print(f"Valid keywords are: {valid_keywords}", file=sys.stderr)
                     sys.exit(1)
@@ -2792,7 +3380,7 @@ Examples:
                     tmp_path = tmp.name
 
                 try:
-                    process_file(tmp_path, wrap_width, overwrite=False, skip_rules=skip_rules, skip_string=args.skip)
+                    process_file(tmp_path, wrap_width, overwrite=False, skip_rules=skip_rules, skip_string=args.skip, reverse_emphasis=args.reverse_emphasis)
                 finally:
                     os.unlink(tmp_path)
                 sys.exit(0)
@@ -2813,7 +3401,7 @@ Examples:
     if overwrite:
         changed_files = []
         for filepath in sorted(files):
-            if process_file(filepath, wrap_width, overwrite=True, skip_rules=skip_rules, skip_string=args.skip):
+            if process_file(filepath, wrap_width, overwrite=True, skip_rules=skip_rules, skip_string=args.skip, reverse_emphasis=args.reverse_emphasis):
                 changed_files.append(filepath)
 
         if changed_files:
@@ -2825,7 +3413,7 @@ Examples:
     else:
         # Output to STDOUT - process all files sequentially
         for filepath in sorted(files):
-            process_file(filepath, wrap_width, overwrite=False, skip_rules=skip_rules, skip_string=args.skip)
+            process_file(filepath, wrap_width, overwrite=False, skip_rules=skip_rules, skip_string=args.skip, reverse_emphasis=args.reverse_emphasis)
 
 if __name__ == '__main__':
     main()

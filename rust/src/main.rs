@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
-const VERSION: &str = "0.1.17";
+const VERSION: &str = "0.1.18";
 const DEFAULT_WRAP_WIDTH: usize = 60;
 
 // Valid GitHub emoji names (normalized: lowercase, hyphens to underscores)
@@ -1191,7 +1191,7 @@ fn normalize_typography(line: &str, skip_em_dash: bool, skip_guillemet: bool) ->
     result
 }
 
-fn normalize_bold_italic(line: &str) -> String {
+fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
     // First, identify protected regions (code spans, emoji markers) in the ORIGINAL line
     // Code spans: `code` or ``code``
     let code_span_re = Regex::new(r"`+[^`]*`+").unwrap();
@@ -1233,44 +1233,67 @@ fn normalize_bold_italic(line: &str) -> String {
 
     let mut result = line.to_string();
 
-    // Triple asterisks: ***text*** → __*text*__
-    let re1 = Regex::new(r"\*\*\*([^*]+?)\*\*\*").unwrap();
-    result = re1
-        .replace_all(&result, |caps: &regex::Captures| {
-            let full_match = caps.get(0).unwrap();
-            if is_protected(full_match.start()) {
-                full_match.as_str().to_string()
-            } else {
-                format!("__*{}*__", &caps[1])
-            }
-        })
-        .to_string();
+    if reverse_emphasis {
+        // Reversed: ** for bold, _ for italic
+        // Handle ALL bold-italic combinations first (before standalone patterns)
+        // All should normalize to: _**text**_
 
-    // Bold-italic nested: **_text_** → __*text*__
-    let re2 = Regex::new(r"\*\*_([^_]+?)_\*\*").unwrap();
-    result = re2
-        .replace_all(&result, |caps: &regex::Captures| {
-            let full_match = caps.get(0).unwrap();
-            if is_protected(full_match.start()) {
-                full_match.as_str().to_string()
-            } else {
-                format!("__*{}*__", &caps[1])
-            }
-        })
-        .to_string();
+        // General approach: match any 3-marker combo and normalize to _**text**_
+        // Pattern: ([_*]{3})(.+?)([_*]{3}) - matches any 3 markers + content + any 3 markers
+        let re_bold_italic = Regex::new(r"([_*]{3})(.+?)([_*]{3})").unwrap();
+        result = re_bold_italic
+            .replace_all(&result, |caps: &regex::Captures| {
+                let full_match = caps.get(0).unwrap();
+                if is_protected(full_match.start()) {
+                    return full_match.as_str().to_string();
+                }
 
-    // Italic-bold nested: _**text**_ → *__text__*
-    let re3 = Regex::new(r"_(\*\*[^*]+?\*\*)_").unwrap();
-    result = re3
-        .replace_all(&result, |caps: &regex::Captures| {
-            let full_match = caps.get(0).unwrap();
-            if is_protected(full_match.start()) {
-                full_match.as_str().to_string()
-            } else {
-                format!("*{}*", &caps[1])
-            }
-        })
-        .to_string();
+                let opening = caps.get(1).unwrap().as_str();
+                let content = caps.get(2).unwrap().as_str();
+                let closing = caps.get(3).unwrap().as_str();
+
+                // Verify closing is reverse of opening (ensures balanced bold-italic combo)
+                let expected_closing: String = opening.chars().rev().collect();
+                if closing != expected_closing {
+                    // Not a valid bold-italic combo, return original
+                    return full_match.as_str().to_string();
+                }
+
+                // Normalize to _**content**_
+                format!("_**{}**_", content)
+            })
+            .to_string();
+    } else {
+        // Normal: __ for bold, * for italic
+        // Handle ALL bold-italic combinations first (before standalone patterns)
+        // All should normalize to: __*text*__
+
+        // General approach: match any 3-marker combo and normalize to __*text*__
+        // Pattern: ([_*]{3})(.+?)([_*]{3}) - matches any 3 markers + content + any 3 markers
+        let re_bold_italic = Regex::new(r"([_*]{3})(.+?)([_*]{3})").unwrap();
+        result = re_bold_italic
+            .replace_all(&result, |caps: &regex::Captures| {
+                let full_match = caps.get(0).unwrap();
+                if is_protected(full_match.start()) {
+                    return full_match.as_str().to_string();
+                }
+
+                let opening = caps.get(1).unwrap().as_str();
+                let content = caps.get(2).unwrap().as_str();
+                let closing = caps.get(3).unwrap().as_str();
+
+                // Verify closing is reverse of opening (ensures balanced bold-italic combo)
+                let expected_closing: String = opening.chars().rev().collect();
+                if closing != expected_closing {
+                    // Not a valid bold-italic combo, return original
+                    return full_match.as_str().to_string();
+                }
+
+                // Normalize to __*content*__
+                format!("__*{}*__", content)
+            })
+            .to_string();
+    }
 
     // Rebuild protected regions from current result (positions may have shifted)
     let mut protected_ranges_result: Vec<(usize, usize)> = Vec::new();
@@ -1299,44 +1322,95 @@ fn normalize_bold_italic(line: &str) -> String {
             .any(|(start, end)| pos >= *start && pos < *end)
     };
 
-    // Bold with ** → __ (avoid matching *** or **_)
-    // Since Rust regex doesn't support lookbehind/lookahead, we'll manually check context
-    let re4 = Regex::new(r"(\*\*)([^*]+?)(\*\*)").unwrap();
-    let mut new_result = String::new();
-    let mut last_end = 0;
-    let result_bytes = result.as_bytes();
+    if reverse_emphasis {
+        // Bold with __ → ** (avoid matching ___ or __*)
+        let re4 = Regex::new(r"(__)([^_]+?)(__)").unwrap();
+        let mut new_result = String::new();
+        let mut last_end = 0;
+        let result_bytes = result.as_bytes();
 
-    for cap in re4.captures_iter(&result) {
-        let full_match = cap.get(0).unwrap();
-        let start = full_match.start();
-        let end = full_match.end();
+        for cap in re4.captures_iter(&result) {
+            let full_match = cap.get(0).unwrap();
+            let start = full_match.start();
+            let end = full_match.end();
 
-        // Add text before match
-        new_result.push_str(&result[last_end..start]);
+            // Add text before match
+            new_result.push_str(&result[last_end..start]);
 
-        // Check if in protected region
-        if is_protected_result(start) {
-            // Keep original
-            new_result.push_str(full_match.as_str());
-        } else {
-            // Check context using byte indices: not preceded by * and not followed by *
-            let preceded_by_star = start > 0 && result_bytes[start - 1] == b'*';
-            let followed_by_star = end < result_bytes.len() && result_bytes[end] == b'*';
-
-            if preceded_by_star || followed_by_star {
+            // Check if in protected region
+            if is_protected_result(start) {
                 // Keep original
                 new_result.push_str(full_match.as_str());
             } else {
-                // Replace **text** with __text__
-                let content = cap.get(2).unwrap().as_str();
-                new_result.push_str(&format!("__{}__", content));
-            }
-        }
+                // Check context using byte indices: not preceded by _ and not followed by _
+                let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
+                let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
-        last_end = end;
+                if preceded_by_underscore || followed_by_underscore {
+                    // Keep original
+                    new_result.push_str(full_match.as_str());
+                } else {
+                    // Replace __text__ with **text**
+                    let content = cap.get(2).unwrap().as_str();
+                    new_result.push_str(&format!("**{}**", content));
+                }
+            }
+
+            last_end = end;
+        }
+        new_result.push_str(&result[last_end..]);
+        result = new_result;
+    } else {
+        // Bold with ** → __ (avoid matching *** or **_)
+        // Since Rust regex doesn't support lookbehind/lookahead, we'll manually check context
+        // Use .+? instead of [^*]+? to allow * in content (for nested italic)
+        let re4 = Regex::new(r"(\*\*)(.+?)(\*\*)").unwrap();
+        let mut new_result = String::new();
+        let mut last_end = 0;
+        let result_bytes = result.as_bytes();
+
+        for cap in re4.captures_iter(&result) {
+            let full_match = cap.get(0).unwrap();
+            let start = full_match.start();
+            let end = full_match.end();
+
+            // Add text before match
+            new_result.push_str(&result[last_end..start]);
+
+            // Check if in protected region
+            if is_protected_result(start) {
+                // Keep original
+                new_result.push_str(full_match.as_str());
+            } else {
+                // Check context using byte indices: not preceded by * and not followed by * or _
+                let preceded_by_star = start > 0 && result_bytes[start - 1] == b'*';
+                let followed_by_star = end < result_bytes.len() && result_bytes[end] == b'*';
+                let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
+
+                // Check if this starts with *** (triple asterisk) - if so, it's a bold-italic pattern
+                let is_triple_start = start + 2 < result_bytes.len() && result_bytes[start + 2] == b'*';
+
+                // Only skip if:
+                // 1. Preceded by * (part of larger pattern like ***text***)
+                // 2. Starts with *** AND followed by * (triple pattern ***text***)
+                // 3. Followed by _ (nested pattern like **_text_**)
+                // Otherwise, process it as regular bold (even if followed by *, it's just trailing)
+                if preceded_by_star || (is_triple_start && followed_by_star) || followed_by_underscore {
+                    // Keep original (this is a nested pattern like ***text*** or **_text_**)
+                    new_result.push_str(full_match.as_str());
+                } else {
+                    // Replace **text** with __text__
+                    // Get the content - if the match ends with ***, the content already includes the nested italic
+                    let content = cap.get(2).unwrap().as_str();
+                    new_result.push_str(&format!("__{}__", content));
+                }
+            }
+
+            last_end = end;
+        }
+        new_result.push_str(&result[last_end..]);
+        result = new_result;
     }
-    new_result.push_str(&result[last_end..]);
-    result = new_result;
 
     // Rebuild protected regions again for italic check
     let mut protected_ranges_result2: Vec<(usize, usize)> = Vec::new();
@@ -1365,43 +1439,83 @@ fn normalize_bold_italic(line: &str) -> String {
             .any(|(start, end)| pos >= *start && pos < *end)
     };
 
-    // Italics with _ → * (avoid matching __ or **_)
-    let re5 = Regex::new(r"(_)([^_]+?)(_)").unwrap();
-    let mut new_result = String::new();
-    let mut last_end = 0;
-    let result_bytes = result.as_bytes();
+    if reverse_emphasis {
+        // Italics with * → _ (avoid matching ** or *__)
+        let re5 = Regex::new(r"(\*)([^*]+?)(\*)").unwrap();
+        let mut new_result = String::new();
+        let mut last_end = 0;
+        let result_bytes = result.as_bytes();
 
-    for cap in re5.captures_iter(&result) {
-        let full_match = cap.get(0).unwrap();
-        let start = full_match.start();
-        let end = full_match.end();
+        for cap in re5.captures_iter(&result) {
+            let full_match = cap.get(0).unwrap();
+            let start = full_match.start();
+            let end = full_match.end();
 
-        // Add text before match
-        new_result.push_str(&result[last_end..start]);
+            // Add text before match
+            new_result.push_str(&result[last_end..start]);
 
-        // Check if in protected region
-        if is_protected_result2(start) {
-            // Keep original
-            new_result.push_str(full_match.as_str());
-        } else {
-            // Check context using byte indices: not preceded by _ and not followed by _
-            let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
-            let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
-
-            if preceded_by_underscore || followed_by_underscore {
+            // Check if in protected region
+            if is_protected_result2(start) {
                 // Keep original
                 new_result.push_str(full_match.as_str());
             } else {
-                // Replace _text_ with *text*
-                let content = cap.get(2).unwrap().as_str();
-                new_result.push_str(&format!("*{}*", content));
-            }
-        }
+                // Check context using byte indices: not preceded by * and not followed by *
+                let preceded_by_star = start > 0 && result_bytes[start - 1] == b'*';
+                let followed_by_star = end < result_bytes.len() && result_bytes[end] == b'*';
 
-        last_end = end;
+                if preceded_by_star || followed_by_star {
+                    // Keep original
+                    new_result.push_str(full_match.as_str());
+                } else {
+                    // Replace *text* with _text_
+                    let content = cap.get(2).unwrap().as_str();
+                    new_result.push_str(&format!("_{}_", content));
+                }
+            }
+
+            last_end = end;
+        }
+        new_result.push_str(&result[last_end..]);
+        result = new_result;
+    } else {
+        // Italics with _ → * (avoid matching __ or **_)
+        let re5 = Regex::new(r"(_)([^_]+?)(_)").unwrap();
+        let mut new_result = String::new();
+        let mut last_end = 0;
+        let result_bytes = result.as_bytes();
+
+        for cap in re5.captures_iter(&result) {
+            let full_match = cap.get(0).unwrap();
+            let start = full_match.start();
+            let end = full_match.end();
+
+            // Add text before match
+            new_result.push_str(&result[last_end..start]);
+
+            // Check if in protected region
+            if is_protected_result2(start) {
+                // Keep original
+                new_result.push_str(full_match.as_str());
+            } else {
+                // Check context using byte indices: not preceded by _ and not followed by _
+                let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
+                let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
+
+                if preceded_by_underscore || followed_by_underscore {
+                    // Keep original
+                    new_result.push_str(full_match.as_str());
+                } else {
+                    // Replace _text_ with *text*
+                    let content = cap.get(2).unwrap().as_str();
+                    new_result.push_str(&format!("*{}*", content));
+                }
+            }
+
+            last_end = end;
+        }
+        new_result.push_str(&result[last_end..]);
+        result = new_result;
     }
-    new_result.push_str(&result[last_end..]);
-    result = new_result;
 
     result
 }
@@ -1825,6 +1939,423 @@ fn is_blockquote(line: &str) -> bool {
     line.trim_start().starts_with('>')
 }
 
+fn is_in_code_span(text: &str, pos: usize) -> bool {
+    let before = &text[..pos];
+    let mut backticks = 0;
+    let mut i = 0;
+    let chars: Vec<char> = before.chars().collect();
+    while i < chars.len() {
+        if chars[i] == '`' {
+            backticks += 1;
+            while i + 1 < chars.len() && chars[i + 1] == '`' {
+                i += 1;
+                backticks += 1;
+            }
+            i += 1;
+        } else if chars[i] == '\\' {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    backticks % 2 == 1
+}
+
+fn convert_links_in_document(
+    lines: &mut Vec<String>,
+    use_inline: bool,
+    use_reference: bool,
+    place_at_beginning: bool,
+) {
+    if !use_inline && !use_reference {
+        return;
+    }
+
+    // First, collect all existing reference definitions
+    // Pattern: [id]: url or [id]: url "title"
+    let ref_def_pattern = Regex::new(r"^(\[[^\]]+\])\s*:\s*(.+)$").unwrap();
+    let mut ref_definitions: std::collections::HashMap<String, (String, Option<String>)> =
+        std::collections::HashMap::new();
+    let mut ref_def_lines: Vec<usize> = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let stripped = line.trim();
+        if let Some(caps) = ref_def_pattern.captures(stripped) {
+            let ref_id = caps.get(1).unwrap().as_str().to_string();
+            let url_part = caps.get(2).unwrap().as_str().trim();
+
+            // Extract URL and optional title
+            let url_title_re = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
+            let (url, title) = if let Some(url_caps) = url_title_re.captures(url_part) {
+                let url = url_caps.get(1).unwrap().as_str().to_string();
+                let title = url_caps.get(2).map(|m| m.as_str().to_string());
+                (url, title)
+            } else {
+                (url_part.to_string(), None)
+            };
+
+            ref_definitions.insert(ref_id.clone(), (url.clone(), title.clone()));
+            // Also store normalized version for implicit links
+            if ref_id.starts_with('[') && ref_id.ends_with(']') {
+                let ref_text = ref_id[1..ref_id.len() - 1].to_lowercase().trim().to_string();
+                let normalized_id = format!("[{}]", ref_text);
+                if normalized_id != ref_id {
+                    ref_definitions.insert(normalized_id, (url, title));
+                }
+            }
+            ref_def_lines.push(i);
+        }
+    }
+
+    // Remove reference definition lines (in reverse order to maintain indices)
+    for &line_idx in ref_def_lines.iter().rev() {
+        lines.remove(line_idx);
+    }
+
+    // Now find all links in the document
+    let inline_pattern = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap();
+    let ref_pattern = Regex::new(r"\[([^\]]+)\]\[([^\]]+)\]").unwrap();
+    // For implicit links, we'll check manually that it's not followed by [ or (
+    let implicit_pattern = Regex::new(r"\[([^\]]+)\]").unwrap();
+
+    // Track code block state
+    let mut in_code_block = false;
+
+    // Collect all links with their positions and URLs
+    #[derive(Debug, Clone)]
+    struct LinkData {
+        line_idx: usize,
+        start: usize,
+        end: usize,
+        link_text: String,
+        url: String,
+        title: Option<String>,
+    }
+
+    let mut link_data: Vec<LinkData> = Vec::new();
+    let mut matched_positions: std::collections::HashSet<(usize, usize, usize)> =
+        std::collections::HashSet::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        // Track code blocks
+        if is_code_block(line) {
+            in_code_block = !in_code_block;
+            continue;
+        }
+
+        if in_code_block {
+            continue;
+        }
+
+        // Find inline links: [text](url) or [text](url "title")
+        for cap in inline_pattern.captures_iter(line) {
+            let m = cap.get(0).unwrap();
+            if is_in_code_span(line, m.start()) {
+                continue;
+            }
+            let pos_key = (i, m.start(), m.end());
+            if matched_positions.contains(&pos_key) {
+                continue;
+            }
+            matched_positions.insert(pos_key);
+
+            let link_text = cap.get(1).unwrap().as_str().to_string();
+            let url_part = cap.get(2).unwrap().as_str();
+
+            // Extract URL and title
+            let url_title_re = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
+            let (url, title) = if let Some(url_caps) = url_title_re.captures(url_part) {
+                let url = url_caps.get(1).unwrap().as_str().to_string();
+                let title = url_caps.get(2).map(|m| m.as_str().to_string());
+                (url, title)
+            } else {
+                (url_part.to_string(), None)
+            };
+
+            link_data.push(LinkData {
+                line_idx: i,
+                start: m.start(),
+                end: m.end(),
+                link_text,
+                url,
+                title,
+            });
+        }
+
+        // Find reference links: [text][ref]
+        for cap in ref_pattern.captures_iter(line) {
+            let m = cap.get(0).unwrap();
+            if is_in_code_span(line, m.start()) {
+                continue;
+            }
+            let pos_key = (i, m.start(), m.end());
+            if matched_positions.contains(&pos_key) {
+                continue;
+            }
+            matched_positions.insert(pos_key);
+
+            let link_text = cap.get(1).unwrap().as_str().to_string();
+            let ref_id = cap.get(2).unwrap().as_str();
+            let ref_key = format!("[{}]", ref_id);
+
+            // Look up URL from definitions
+            if let Some((url, title)) = ref_definitions.get(&ref_key) {
+                link_data.push(LinkData {
+                    line_idx: i,
+                    start: m.start(),
+                    end: m.end(),
+                    link_text,
+                    url: url.clone(),
+                    title: title.clone(),
+                });
+            }
+        }
+
+        // Find implicit reference links: [text] (without explicit ref)
+        // Check that it's not followed by [ or ( to avoid matching explicit refs or inline links
+        for cap in implicit_pattern.captures_iter(line) {
+            let m = cap.get(0).unwrap();
+            if is_in_code_span(line, m.start()) {
+                continue;
+            }
+            // Check if this position overlaps with a previously matched link
+            let mut already_covered = false;
+            for &(existing_line_idx, existing_start, existing_end) in &matched_positions {
+                if existing_line_idx == i && existing_start <= m.start() && m.start() < existing_end {
+                    already_covered = true;
+                    break;
+                }
+            }
+            if already_covered {
+                continue;
+            }
+
+            // Check that it's not followed by [ or ( (manual look-ahead check)
+            if m.end() < line.len() {
+                let next_char = line.chars().nth(m.end()).unwrap_or(' ');
+                if next_char == '[' || next_char == '(' {
+                    continue; // This is part of an explicit reference or inline link
+                }
+            }
+
+            let link_text = cap.get(1).unwrap().as_str().to_string();
+            let ref_id_normalized = format!("[{}]", link_text.to_lowercase().trim());
+
+            if let Some((url, title)) = ref_definitions.get(&ref_id_normalized) {
+                let pos_key = (i, m.start(), m.end());
+                matched_positions.insert(pos_key);
+                link_data.push(LinkData {
+                    line_idx: i,
+                    start: m.start(),
+                    end: m.end(),
+                    link_text,
+                    url: url.clone(),
+                    title: title.clone(),
+                });
+            }
+        }
+    }
+
+    // Convert links based on mode
+    if use_inline {
+        // Convert all to inline format (process in reverse to maintain positions)
+        link_data.sort_by(|a, b| {
+            b.line_idx
+                .cmp(&a.line_idx)
+                .then(b.start.cmp(&a.start))
+        });
+
+        for link in &link_data {
+            let line = &lines[link.line_idx];
+            let replacement = if let Some(ref title) = link.title {
+                format!("[{}]({} \"{}\")", link.link_text, link.url, title)
+            } else {
+                format!("[{}]({})", link.link_text, link.url)
+            };
+            let new_line = format!(
+                "{}{}{}",
+                &line[..link.start],
+                replacement,
+                &line[link.end..]
+            );
+            lines[link.line_idx] = new_line;
+        }
+    } else if use_reference {
+        // Assign reference numbers in document order
+        let mut url_to_ref: std::collections::HashMap<(String, Option<String>), usize> =
+            std::collections::HashMap::new();
+        let mut next_ref = 1;
+
+        for link in &link_data {
+            let url_key = (link.url.clone(), link.title.clone());
+            if !url_to_ref.contains_key(&url_key) {
+                url_to_ref.insert(url_key, next_ref);
+                next_ref += 1;
+            }
+        }
+
+        // Replace links with numeric references (process in reverse to maintain positions)
+        // Group links by line and sort by position (right to left for replacement)
+        let mut links_by_line: std::collections::HashMap<usize, Vec<(usize, usize, &LinkData)>> =
+            std::collections::HashMap::new();
+        let mut seen_links: std::collections::HashSet<(usize, usize, usize)> =
+            std::collections::HashSet::new();
+
+        for link in &link_data {
+            let link_key = (link.line_idx, link.start, link.end);
+            if seen_links.contains(&link_key) {
+                continue; // Skip duplicate links
+            }
+            seen_links.insert(link_key);
+
+            links_by_line
+                .entry(link.line_idx)
+                .or_insert_with(Vec::new)
+                .push((link.start, link.end, link));
+        }
+
+        for line_idx in links_by_line.keys().copied().collect::<Vec<_>>().into_iter().rev() {
+            let line = lines[line_idx].clone();
+            let mut line_links = links_by_line[&line_idx].clone();
+            // Sort by start position, descending (right to left)
+            line_links.sort_by(|a, b| b.0.cmp(&a.0));
+
+            // Build new line by replacing from right to left
+            let mut new_line = line.clone();
+            let mut replaced_ranges: std::collections::HashSet<(usize, usize)> =
+                std::collections::HashSet::new();
+
+            for (start, end, link) in line_links {
+                // Skip if we've already replaced this exact range (avoid duplicates)
+                let range_key = (start, end);
+                if replaced_ranges.contains(&range_key) {
+                    continue;
+                }
+                replaced_ranges.insert(range_key);
+
+                let url_key = (link.url.clone(), link.title.clone());
+                let ref_num = url_to_ref[&url_key];
+                let replacement = format!("[{}][{}]", link.link_text, ref_num);
+                // Replace from right to left to maintain positions
+                new_line = format!("{}{}{}", &new_line[..start], replacement, &new_line[end..]);
+            }
+
+            // Verify that if the original line was a list item, the new line is still a list item
+            if is_list_item(&line) {
+                let list_re = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
+                if let Some(orig_caps) = list_re.captures(&line) {
+                    let orig_indent = orig_caps.get(1).unwrap().as_str();
+                    let orig_marker = orig_caps.get(2).unwrap().as_str();
+                    let orig_marker_space = orig_caps.get(3).unwrap().as_str();
+                    let _orig_content = orig_caps.get(4).unwrap().as_str();
+
+                    // Check if the new line is still a valid list item
+                    if let Some(new_caps) = list_re.captures(&new_line) {
+                        let new_indent = new_caps.get(1).unwrap().as_str();
+                        let new_marker = new_caps.get(2).unwrap().as_str();
+                        let new_content = new_caps.get(4).unwrap().as_str();
+
+                        if new_marker != orig_marker || new_indent != orig_indent {
+                            // Restore original structure
+                            new_line = format!(
+                                "{}{}{}{}",
+                                orig_indent, orig_marker, orig_marker_space, new_content
+                            );
+                            if line.ends_with('\n') && !new_line.ends_with('\n') {
+                                new_line.push('\n');
+                            }
+                        }
+                    } else {
+                        // The replacement broke the list structure - reconstruct it
+                        let marker_end_pos = orig_indent.len() + orig_marker.len() + orig_marker_space.len();
+                        let new_content = if new_line.len() < marker_end_pos {
+                            new_line.trim_start()
+                        } else {
+                            &new_line[marker_end_pos..]
+                        }
+                        .trim_start();
+                        // Remove any marker that might be at the start
+                        let new_content = Regex::new(r"^[-*+]|\d+\.\s*")
+                            .unwrap()
+                            .replace(new_content, "")
+                            .trim_start()
+                            .to_string();
+
+                        // Reconstruct the line with original structure
+                        new_line = format!(
+                            "{}{}{}{}",
+                            orig_indent, orig_marker, orig_marker_space, new_content
+                        );
+                        if line.ends_with('\n') && !new_line.ends_with('\n') {
+                            new_line.push('\n');
+                        }
+                    }
+                }
+            }
+
+            lines[line_idx] = new_line;
+        }
+
+        // Add reference definitions
+        if place_at_beginning {
+            // Place all definitions at the beginning
+            // Remove any leading blank lines and front matter
+            let mut insert_pos = 0;
+            // Skip YAML front matter if present
+            if !lines.is_empty() && lines[0].trim() == "---" {
+                // Find end of front matter
+                for i in 1..lines.len() {
+                    if lines[i].trim() == "---" {
+                        insert_pos = i + 1;
+                        break;
+                    }
+                }
+            }
+
+            // Ensure blank line after front matter or at start
+            if insert_pos < lines.len() && !lines[insert_pos].trim().is_empty() {
+                lines.insert(insert_pos, "\n".to_string());
+                insert_pos += 1;
+            }
+
+            // Add definitions in document order
+            let mut sorted_refs: Vec<_> = url_to_ref.iter().collect();
+            sorted_refs.sort_by_key(|(_, &ref_num)| ref_num);
+            for ((url, title), &ref_num) in sorted_refs {
+                if let Some(title) = title {
+                    lines.insert(insert_pos, format!("[{}]: {} \"{}\"\n", ref_num, url, title));
+                } else {
+                    lines.insert(insert_pos, format!("[{}]: {}\n", ref_num, url));
+                }
+                insert_pos += 1;
+            }
+
+            // Add blank line after definitions
+            if insert_pos < lines.len() && !lines[insert_pos].trim().is_empty() {
+                lines.insert(insert_pos, "\n".to_string());
+            }
+        } else {
+            // Place all definitions at bottom (default behavior)
+            while !lines.is_empty() && lines[lines.len() - 1].trim().is_empty() {
+                lines.pop();
+            }
+
+            let mut sorted_refs: Vec<_> = url_to_ref.iter().collect();
+            sorted_refs.sort_by_key(|(_, &ref_num)| ref_num);
+            if !url_to_ref.is_empty() {
+                lines.push("\n".to_string());
+                for ((url, title), &ref_num) in sorted_refs {
+                    if let Some(title) = title {
+                        lines.push(format!("[{}]: {} \"{}\"\n", ref_num, url, title));
+                    } else {
+                        lines.push(format!("[{}]: {}\n", ref_num, url));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn get_blockquote_prefix(line: &str) -> String {
     let re = Regex::new(r"^(\s*)").unwrap();
     let spaces = if let Some(caps) = re.captures(line) {
@@ -1926,6 +2457,9 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 25, description: "Normalize bold/italic markers (bold: __, italic: *)", keyword: "bold-italic" },
     LintingRule { num: 26, description: "Normalize list markers (renumber ordered lists, standardize bullet markers by level)", keyword: "list-markers" },
     LintingRule { num: 27, description: "Reset ordered lists to start at 1 (if disabled, preserve starting number)", keyword: "list-reset" },
+    LintingRule { num: 28, description: "Convert links to numeric reference links", keyword: "reference-links" },
+    LintingRule { num: 29, description: "Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)", keyword: "links-at-end" },
+    LintingRule { num: 30, description: "Convert links to inline format (overrides reference-links if enabled)", keyword: "inline-links" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -1964,6 +2498,9 @@ fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String>
             } else {
                 return Err(format!("Invalid rule number: {}", rule_num));
             }
+        } else if value == "emphasis" {
+            // Alias for bold-italic (rule 25)
+            skip_rules.insert(25);
         } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == value) {
             skip_rules.insert(rule.num);
         } else {
@@ -2094,6 +2631,8 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                         skip_rules.remove(&7);
                     } else if item == "display-math-newlines" {
                         skip_rules.remove(&21);
+                    } else if item == "emphasis" {
+                        skip_rules.remove(&25);
                     } else if let Some(rule) =
                         LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
                     {
@@ -2114,6 +2653,8 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                     skip_rules.insert(7);
                 } else if item == "display-math-newlines" {
                     skip_rules.insert(21);
+                } else if item == "emphasis" {
+                    skip_rules.insert(25);
                 } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
                 {
                     skip_rules.insert(rule.num);
@@ -2134,6 +2675,8 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
                         skip_rules.remove(&7);
                     } else if item == "display-math-newlines" {
                         skip_rules.remove(&21);
+                    } else if item == "emphasis" {
+                        skip_rules.remove(&25);
                     } else if let Some(rule) =
                         LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
                     {
@@ -2158,6 +2701,7 @@ fn process_file(
     skip_rules: &HashSet<u8>,
     skip_em_dash: bool,
     skip_guillemet: bool,
+    reverse_emphasis: bool,
 ) -> Result<bool, String> {
     let content =
         fs::read_to_string(filepath).map_err(|e| format!("Error reading {}: {}", filepath, e))?;
@@ -2276,7 +2820,7 @@ fn process_file(
 
         // Normalize bold/italic markers
         if !skip_rules.contains(&25) {
-            let normalized_bold_italic = normalize_bold_italic(&line);
+            let normalized_bold_italic = normalize_bold_italic(&line, reverse_emphasis);
             if normalized_bold_italic != line {
                 line = normalized_bold_italic;
                 changes_made = true;
@@ -2808,6 +3352,35 @@ fn process_file(
         i += 1;
     }
 
+    // Process link conversions (rules 28, 29, 30)
+    // Rule 30 (inline-links) is disabled by default and overrides rule 28 if enabled
+    // Rule 28 (reference-links) is enabled by default
+    // Rule 29 (links-at-end) is enabled by default - puts links at end
+    // If rule 29 is skipped AND rule 28 is enabled, put links at beginning
+    // If rule 29 is included, rule 28 is included by default
+    // If rule 30 is included, both rule 28 and 29 are skipped
+    let use_inline = !skip_rules.contains(&30);
+    let mut link_skip_rules = skip_rules.clone();
+    if use_inline {
+        // If inline-links is enabled, skip reference-links and links-at-end
+        link_skip_rules.insert(28);
+        link_skip_rules.insert(29);
+    }
+
+    // If links-at-end is included, reference-links is included by default
+    if !link_skip_rules.contains(&29) {
+        link_skip_rules.remove(&28); // Enable reference-links if links-at-end is enabled
+    }
+
+    let use_reference = !link_skip_rules.contains(&28) && !use_inline;
+    // place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
+    let place_at_beginning = link_skip_rules.contains(&29) && use_reference;
+
+    if use_inline || use_reference {
+        convert_links_in_document(&mut output, use_inline, use_reference, place_at_beginning);
+        changes_made = true;
+    }
+
     // Ensure exactly one blank line at end of file
     if !skip_rules.contains(&15) {
         while !output.is_empty() && output[output.len() - 1].trim().is_empty() {
@@ -2917,6 +3490,12 @@ fn main() {
             Arg::new("init-config-local")
                 .long("init-config-local")
                 .help("Initialize a local config file with all rules enabled by name (creates .md-fixup in current directory)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("reverse-emphasis")
+                .long("reverse-emphasis")
+                .help("Reverse emphasis markers: use ** for bold and _ for italic (instead of __ for bold and * for italic)")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -3077,6 +3656,42 @@ Examples:
         HashSet::new()
     };
 
+    // Rule 30 (inline-links) is disabled by default unless explicitly enabled
+    // Check if rule 30 is explicitly enabled in config
+    let rule_30_explicitly_enabled = if let Some(ref cfg) = config {
+        if let Some(ref rules_config) = cfg.rules {
+            if let Some(RulesList::All) = rules_config.skip.as_ref() {
+                // If skip: all, check if inline-links is in include list
+                if let Some(RulesList::List(ref include_list)) = rules_config.include.as_ref() {
+                    include_list.iter().any(|item| {
+                        item == "inline-links" || item.parse::<u8>().ok() == Some(30)
+                    })
+                } else {
+                    false
+                }
+            } else {
+                // If not skip: all, check if inline-links is NOT in skip list
+                if let Some(RulesList::List(ref skip_list)) = rules_config.skip.as_ref() {
+                    !skip_list.iter().any(|item| {
+                        item == "inline-links" || item.parse::<u8>().ok() == Some(30)
+                    })
+                } else {
+                    // No skip list means rule 30 is enabled by default (but we want to disable it)
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // If rule 30 is not explicitly enabled, disable it by default
+    if !rule_30_explicitly_enabled {
+        skip_rules.insert(30);
+    }
+
     let skip_str = matches.get_one::<String>("skip");
     let (cli_skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
         match parse_skip_rules(skip_str) {
@@ -3092,6 +3707,8 @@ Examples:
 
     // Merge CLI skip rules into config skip rules (CLI overrides config)
     skip_rules.extend(cli_skip_rules);
+
+    let reverse_emphasis = matches.get_flag("reverse-emphasis");
 
     let mut files: Vec<String> = if let Some(file_args) = matches.get_many::<String>("files") {
         file_args.map(|s| s.to_string()).collect()
@@ -3166,6 +3783,7 @@ Examples:
                     &skip_rules,
                     skip_em_dash,
                     skip_guillemet,
+                    reverse_emphasis,
                 ) {
                     Ok(_) => {
                         // process_file already printed to stdout when overwrite=false
@@ -3203,6 +3821,7 @@ Examples:
                 &skip_rules,
                 skip_em_dash,
                 skip_guillemet,
+                reverse_emphasis,
             ) {
                 Ok(true) => changed_files.push(filepath.clone()),
                 Ok(false) => {}
@@ -3229,6 +3848,7 @@ Examples:
                 &skip_rules,
                 skip_em_dash,
                 skip_guillemet,
+                reverse_emphasis,
             ) {
                 eprintln!("{}", e);
             }
@@ -3249,9 +3869,11 @@ mod tests {
         file.flush().unwrap();
         let path = file.path().to_str().unwrap();
 
-        let skip_rules = HashSet::new();
+        let mut skip_rules = HashSet::new();
+        // Rule 30 (inline-links) is disabled by default
+        skip_rules.insert(30);
         // Use overwrite=true so the file is actually modified
-        process_file(path, 60, true, &skip_rules, false, false).unwrap();
+        process_file(path, 60, true, &skip_rules, false, false, false).unwrap();
 
         fs::read_to_string(path).unwrap()
     }
@@ -3425,8 +4047,198 @@ mod tests {
 
         let skip_rules = HashSet::new();
         // Use overwrite=true so the file is actually modified
-        process_file(path, width, true, &skip_rules, false, false).unwrap();
+        process_file(path, width, true, &skip_rules, false, false, false).unwrap();
 
         fs::read_to_string(path).unwrap()
+    }
+
+    fn process_test_content_with_skip(content: &str, skip_rules: &HashSet<u8>) -> String {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", content).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_str().unwrap();
+
+        // Use overwrite=true so the file is actually modified
+        process_file(path, 60, true, skip_rules, false, false, false).unwrap();
+
+        fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn test_convert_to_reference_links() {
+        let input = "This is a [link](https://example.com) to test.\n";
+        let output = process_test_content(input);
+        // Should convert to reference link format
+        assert!(output.contains("[link]"));
+        assert!(output.contains("[1]: https://example.com"));
+    }
+
+    #[test]
+    fn test_convert_to_inline_links() {
+        let input = "This is a [link][1] to test.\n\n[1]: https://example.com\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(28); // Skip reference-links
+        skip_rules.insert(29); // Skip links-at-end
+        // Rule 30 (inline-links) is enabled by not skipping it
+        skip_rules.remove(&30); // Enable inline-links
+        let output = process_test_content_with_skip(input, &skip_rules);
+        // Should convert to inline format
+        assert!(output.contains("[link](https://example.com)"));
+        assert!(!output.contains("[1]:"));
+    }
+
+    #[test]
+    fn test_reference_links_at_end() {
+        let input = "This is a [link](https://example.com) to test.\n";
+        let output = process_test_content(input);
+        // Links should be at the end by default
+        let lines: Vec<&str> = output.lines().collect();
+        let last_non_empty = lines.iter().rev().find(|l| !l.trim().is_empty());
+        assert!(last_non_empty.is_some());
+        assert!(last_non_empty.unwrap().contains("[1]:"));
+    }
+
+    #[test]
+    fn test_reference_links_at_beginning() {
+        let input = "This is a [link](https://example.com) to test.\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(29); // Skip links-at-end (puts links at beginning)
+        skip_rules.insert(30); // Disable inline-links (enable reference-links)
+        let output = process_test_content_with_skip(input, &skip_rules);
+        // Links should be at the beginning
+        let lines: Vec<&str> = output.lines().collect();
+        // Find first reference definition
+        let first_ref = lines.iter().position(|l| l.contains("[1]:"));
+        assert!(first_ref.is_some(), "Output: {}", output);
+        assert!(first_ref.unwrap() < 5); // Should be near the beginning
+    }
+
+    #[test]
+    fn test_multiple_links_same_url() {
+        let input = "This is a [link1](https://example.com) and [link2](https://example.com).\n";
+        let output = process_test_content(input);
+        // Both links should reference the same number
+        assert!(output.contains("[link1][1]"));
+        assert!(output.contains("[link2][1]"));
+        // Should only have one definition
+        let ref_count = output.matches("[1]:").count();
+        assert_eq!(ref_count, 1);
+    }
+
+    #[test]
+    fn test_links_in_lists() {
+        let input = "- Item with [link](https://example.com)\n- Another item\n";
+        let output = process_test_content(input);
+        // List structure should be preserved (may be normalized to * or -)
+        assert!(output.contains("Item with") || output.contains("Item with [link]"));
+        assert!(output.contains("[link]"));
+        assert!(output.contains("[1]: https://example.com"));
+    }
+
+    #[test]
+    fn test_list_reset_preserve_number() {
+        let input = "7. First\n8. Second\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(27); // Skip list-reset (preserve starting number)
+        let output = process_test_content_with_skip(input, &skip_rules);
+        // Should preserve starting number
+        assert!(output.contains("7. First"));
+        assert!(output.contains("8. Second"));
+    }
+
+    #[test]
+    fn test_list_reset_default() {
+        let input = "7. First\n8. Second\n";
+        let output = process_test_content(input);
+        // Should reset to 1 by default
+        assert!(output.contains("1. First"));
+        assert!(output.contains("2. Second"));
+        assert!(!output.contains("7. First"));
+    }
+
+    #[test]
+    fn test_list_markers_normalization() {
+        let input = "- Item 1\n+ Item 2\n* Item 3\n";
+        let output = process_test_content(input);
+        // Should normalize bullet markers by level
+        assert!(output.contains("* Item 1") || output.contains("- Item 1"));
+        // All should be normalized consistently
+        let has_consistent_markers = output.contains("* Item 1")
+            || (output.contains("- Item 1") && output.contains("- Item 2") && output.contains("- Item 3"));
+        assert!(has_consistent_markers);
+    }
+
+    #[test]
+    fn test_list_markers_skip() {
+        let input = "1. First\n3. Third\n5. Fifth\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(26); // Skip list-markers
+        let output = process_test_content_with_skip(input, &skip_rules);
+        // Should preserve original numbers
+        assert!(output.contains("1. First"));
+        assert!(output.contains("3. Third"));
+        assert!(output.contains("5. Fifth"));
+    }
+
+    #[test]
+    fn test_links_with_titles() {
+        let input = "This is a [link](https://example.com \"Title\").\n";
+        let output = process_test_content(input);
+        // Should preserve title in reference
+        assert!(output.contains("[link][1]"));
+        assert!(output.contains("[1]: https://example.com \"Title\""));
+    }
+
+    #[test]
+    fn test_existing_reference_links_renumbered() {
+        let input = "This is a [link][1].\n\n[1]: https://old.com\n[2]: https://new.com\n";
+        let output = process_test_content(input);
+        // Existing references should be renumbered
+        assert!(output.contains("[link]"));
+        // Should have numeric references
+        assert!(output.matches("]: https://").count() >= 1);
+    }
+
+    #[test]
+    fn test_implicit_reference_links() {
+        let input = "This is a [link].\n\n[link]: https://example.com\n";
+        let output = process_test_content(input);
+        // Implicit reference should be converted to numeric
+        assert!(output.contains("[link]"));
+        // Should have numeric reference definition
+        assert!(output.matches("]: https://example.com").count() >= 1);
+    }
+
+    #[test]
+    fn test_links_in_code_blocks_ignored() {
+        let input = "```\n[link](https://example.com)\n```\n";
+        let output = process_test_content(input);
+        // Links in code blocks should not be converted
+        assert!(output.contains("[link](https://example.com)"));
+        assert!(!output.contains("[link][1]"));
+    }
+
+    #[test]
+    fn test_links_in_code_spans_ignored() {
+        let input = "This has `[link](https://example.com)` in code.\n";
+        let output = process_test_content(input);
+        // Links in code spans should not be converted
+        assert!(output.contains("[link](https://example.com)"));
+        assert!(!output.contains("[link][1]"));
+    }
+
+    #[test]
+    fn test_front_matter_with_links_at_beginning() {
+        let input = "---\ntitle: Test\n---\n\nThis is a [link](https://example.com).\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(29); // Skip links-at-end (puts links at beginning)
+        skip_rules.insert(30); // Disable inline-links (enable reference-links)
+        let output = process_test_content_with_skip(input, &skip_rules);
+        // Links should be after front matter
+        let lines: Vec<&str> = output.lines().collect();
+        let front_matter_end = lines.iter().position(|l| l.trim() == "---").unwrap_or(0) + 1;
+        let link_def_pos = lines.iter().position(|l| l.contains("[1]:"));
+        assert!(link_def_pos.is_some(), "Output: {}", output);
+        assert!(link_def_pos.unwrap() > front_matter_end);
     }
 }

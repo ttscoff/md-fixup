@@ -2030,6 +2030,8 @@ fn convert_links_in_document(
         link_text: String,
         url: String,
         title: Option<String>,
+        link_type: String,  // "inline", "reference", "implicit"
+        ref_id: Option<String>,  // Original reference ID for 'reference' and 'implicit' types
     }
 
     let mut link_data: Vec<LinkData> = Vec::new();
@@ -2079,6 +2081,8 @@ fn convert_links_in_document(
                 link_text,
                 url,
                 title,
+                link_type: "inline".to_string(),
+                ref_id: None,
             });
         }
 
@@ -2107,6 +2111,8 @@ fn convert_links_in_document(
                     link_text,
                     url: url.clone(),
                     title: title.clone(),
+                    link_type: "reference".to_string(),
+                    ref_id: Some(ref_id.to_string()),
                 });
             }
         }
@@ -2144,6 +2150,19 @@ fn convert_links_in_document(
             if let Some((url, title)) = ref_definitions.get(&ref_id_normalized) {
                 let pos_key = (i, m.start(), m.end());
                 matched_positions.insert(pos_key);
+                // Find the actual ref_id from definitions (could be different case)
+                let mut actual_ref_id: Option<String> = None;
+                for (def_ref_id, _) in ref_definitions.iter() {
+                    if def_ref_id.to_lowercase().trim() == ref_id_normalized.to_lowercase().trim() {
+                        // Extract the ID without brackets
+                        if def_ref_id.starts_with('[') && def_ref_id.ends_with(']') {
+                            actual_ref_id = Some(def_ref_id[1..def_ref_id.len() - 1].to_string());
+                            break;
+                        }
+                    }
+                }
+                // Fallback to normalized link text if no match found
+                let final_ref_id = actual_ref_id.unwrap_or_else(|| link_text.to_lowercase().trim().to_string());
                 link_data.push(LinkData {
                     line_idx: i,
                     start: m.start(),
@@ -2151,6 +2170,8 @@ fn convert_links_in_document(
                     link_text,
                     url: url.clone(),
                     title: title.clone(),
+                    link_type: "implicit".to_string(),
+                    ref_id: Some(final_ref_id),
                 });
             }
         }
@@ -2181,16 +2202,72 @@ fn convert_links_in_document(
             lines[link.line_idx] = new_line;
         }
     } else if use_reference {
-        // Assign reference numbers in document order
+        // Track text-based reference IDs and their URLs (for preserving existing refs)
+        let mut text_ref_to_url: std::collections::HashMap<String, (String, Option<String>)> =
+            std::collections::HashMap::new();
+        let mut text_ref_order: Vec<String> = Vec::new();
+
+        // Track numeric references for inline links only
         let mut url_to_ref: std::collections::HashMap<(String, Option<String>), usize> =
             std::collections::HashMap::new();
-        let mut next_ref = 1;
 
+        // First pass: collect text-based reference IDs (including numeric ones)
         for link in &link_data {
-            let url_key = (link.url.clone(), link.title.clone());
-            if !url_to_ref.contains_key(&url_key) {
-                url_to_ref.insert(url_key, next_ref);
-                next_ref += 1;
+            if link.link_type == "reference" {
+                // Preserve existing reference links - track their ID and URL
+                if let Some(ref ref_id) = link.ref_id {
+                    if !link.url.is_empty() {
+                        text_ref_to_url.insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
+                        if !text_ref_order.contains(ref_id) {
+                            text_ref_order.push(ref_id.clone());
+                        }
+                    }
+                }
+            } else if link.link_type == "implicit" {
+                // Preserve implicit reference links - track their ID and URL
+                if let Some(ref ref_id) = link.ref_id {
+                    if !link.url.is_empty() {
+                        text_ref_to_url.insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
+                        if !text_ref_order.contains(ref_id) {
+                            text_ref_order.push(ref_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Determine the highest numeric ID used in text-based references
+        // This ensures we don't duplicate numeric IDs when assigning to inline links
+        let mut used_numeric_ids: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for ref_id in text_ref_to_url.keys() {
+            // Check if ref_id is a numeric string (like "1", "2", etc.)
+            if let Ok(num_id) = ref_id.parse::<usize>() {
+                used_numeric_ids.insert(num_id);
+            }
+        }
+
+        // Find the next available numeric ID (must be higher than any existing numeric ID)
+        let mut next_ref = 1;
+        if !used_numeric_ids.is_empty() {
+            next_ref = *used_numeric_ids.iter().max().unwrap() + 1;
+        }
+
+        // Second pass: assign numeric references to inline links (skipping used numbers)
+        for link in &link_data {
+            if link.link_type == "inline" {
+                // Only inline links get numeric references
+                if !link.url.is_empty() {
+                    let url_key = (link.url.clone(), link.title.clone());
+                    if !url_to_ref.contains_key(&url_key) {
+                        // Make sure we don't use a number that's already taken
+                        while used_numeric_ids.contains(&next_ref) {
+                            next_ref += 1;
+                        }
+                        url_to_ref.insert(url_key, next_ref);
+                        used_numeric_ids.insert(next_ref);
+                        next_ref += 1;
+                    }
+                }
             }
         }
 
@@ -2233,9 +2310,21 @@ fn convert_links_in_document(
                 }
                 replaced_ranges.insert(range_key);
 
-                let url_key = (link.url.clone(), link.title.clone());
-                let ref_num = url_to_ref[&url_key];
-                let replacement = format!("[{}][{}]", link.link_text, ref_num);
+                let replacement = if link.link_type == "reference" && link.ref_id.is_some() {
+                    // Preserve existing reference link
+                    format!("[{}][{}]", link.link_text, link.ref_id.as_ref().unwrap())
+                } else if link.link_type == "implicit" && link.ref_id.is_some() {
+                    // Preserve implicit reference link
+                    format!("[{}]", link.link_text)
+                } else if link.link_type == "inline" && !link.url.is_empty() {
+                    // Convert inline link to numeric reference
+                    let url_key = (link.url.clone(), link.title.clone());
+                    let ref_num = url_to_ref[&url_key];
+                    format!("[{}][{}]", link.link_text, ref_num)
+                } else {
+                    // Skip links without valid data
+                    continue;
+                };
                 // Replace from right to left to maintain positions
                 new_line = format!("{}{}{}", &new_line[..start], replacement, &new_line[end..]);
             }
@@ -2297,6 +2386,7 @@ fn convert_links_in_document(
         }
 
         // Add reference definitions
+        // Organize: text-based refs first (in document order), then numbered refs
         if place_at_beginning {
             // Place all definitions at the beginning
             // Remove any leading blank lines and front matter
@@ -2318,7 +2408,18 @@ fn convert_links_in_document(
                 insert_pos += 1;
             }
 
-            // Add definitions in document order
+            // Add text-based reference definitions first (in document order)
+            for ref_id in &text_ref_order {
+                let (url, title) = &text_ref_to_url[ref_id];
+                if let Some(title) = title {
+                    lines.insert(insert_pos, format!("[{}]: {} \"{}\"\n", ref_id, url, title));
+                } else {
+                    lines.insert(insert_pos, format!("[{}]: {}\n", ref_id, url));
+                }
+                insert_pos += 1;
+            }
+
+            // Add numeric reference definitions next (in order)
             let mut sorted_refs: Vec<_> = url_to_ref.iter().collect();
             sorted_refs.sort_by_key(|(_, &ref_num)| ref_num);
             for ((url, title), &ref_num) in sorted_refs {
@@ -2340,16 +2441,28 @@ fn convert_links_in_document(
                 lines.pop();
             }
 
+            if !text_ref_to_url.is_empty() || !url_to_ref.is_empty() {
+                lines.push("\n".to_string());
+            }
+
+            // Add text-based reference definitions first (in document order)
+            for ref_id in &text_ref_order {
+                let (url, title) = &text_ref_to_url[ref_id];
+                if let Some(title) = title {
+                    lines.push(format!("[{}]: {} \"{}\"\n", ref_id, url, title));
+                } else {
+                    lines.push(format!("[{}]: {}\n", ref_id, url));
+                }
+            }
+
+            // Add numeric reference definitions next (in order)
             let mut sorted_refs: Vec<_> = url_to_ref.iter().collect();
             sorted_refs.sort_by_key(|(_, &ref_num)| ref_num);
-            if !url_to_ref.is_empty() {
-                lines.push("\n".to_string());
-                for ((url, title), &ref_num) in sorted_refs {
-                    if let Some(title) = title {
-                        lines.push(format!("[{}]: {} \"{}\"\n", ref_num, url, title));
-                    } else {
-                        lines.push(format!("[{}]: {}\n", ref_num, url));
-                    }
+            for ((url, title), &ref_num) in sorted_refs {
+                if let Some(title) = title {
+                    lines.push(format!("[{}]: {} \"{}\"\n", ref_num, url, title));
+                } else {
+                    lines.push(format!("[{}]: {}\n", ref_num, url));
                 }
             }
         }
@@ -4240,5 +4353,20 @@ mod tests {
         let link_def_pos = lines.iter().position(|l| l.contains("[1]:"));
         assert!(link_def_pos.is_some(), "Output: {}", output);
         assert!(link_def_pos.unwrap() > front_matter_end);
+    }
+
+    #[test]
+    fn test_avoid_numeric_id_conflict() {
+        let input = "This is a [link][1] with numeric ID. Here's an [inline link](https://example.com/inline).\n\n[1]: https://example.com/existing\n";
+        let output = process_test_content(input);
+        // Existing reference link with numeric ID should be preserved
+        assert!(output.contains("[link][1]"));
+        // Inline link should get next available number (2, not 1)
+        assert!(output.contains("[inline link][2]"));
+        // Should not have duplicate [1] definitions
+        let def_count = output.matches("[1]:").count();
+        assert_eq!(def_count, 1, "Should only have one [1]: definition, found {}", def_count);
+        // Should have [2]: definition
+        assert!(output.contains("[2]: https://example.com/inline"));
     }
 }

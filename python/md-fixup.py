@@ -2062,7 +2062,10 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
         return backticks % 2 == 1
 
     # Collect all links with their positions and URLs
-    link_data = []  # List of (line_idx, match_start, match_end, link_text, url, title)
+    # link_data format: (line_idx, match_start, match_end, link_text, url, title, link_type, ref_id)
+    # link_type: 'inline', 'reference', 'implicit'
+    # ref_id: original reference ID (for 'reference' and 'implicit' types), None for 'inline'
+    link_data = []
 
     for i, line in enumerate(lines):
         # Track code blocks
@@ -2099,7 +2102,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                 url = url_part
                 title = None
 
-            link_data.append((i, match.start(), match.end(), link_text, url, title))
+            link_data.append((i, match.start(), match.end(), link_text, url, title, 'inline', None))
 
         # Find reference links: [text][ref]
         ref_pattern = re.compile(r'\[([^\]]+)\]\[([^\]]+)\]')
@@ -2119,7 +2122,12 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
             ref_key = f'[{ref_id}]'
             if ref_key in ref_definitions:
                 url, title = ref_definitions[ref_key]
-                link_data.append((i, match.start(), match.end(), link_text, url, title))
+                # Preserve existing reference links with their original ID
+                link_data.append((i, match.start(), match.end(), link_text, url, title, 'reference', ref_id))
+            else:
+                # Reference link without definition - treat as inline and convert
+                # This shouldn't normally happen, but handle it gracefully
+                link_data.append((i, match.start(), match.end(), link_text, None, None, 'inline', None))
 
         # Find implicit reference links: [text] (without explicit ref)
         # But only if it's not already part of a reference or inline link we found above
@@ -2143,12 +2151,25 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                 url, title = ref_definitions[ref_id_normalized]
                 pos_key = (i, match.start(), match.end())
                 matched_positions.add(pos_key)
-                link_data.append((i, match.start(), match.end(), link_text, url, title))
+                # Preserve implicit reference links - use the normalized ID as the ref_id
+                # Find the actual ref_id that was used in definitions (might be different case)
+                actual_ref_id = None
+                for def_ref_id in ref_definitions.keys():
+                    if def_ref_id.lower() == ref_id_normalized.lower():
+                        actual_ref_id = def_ref_id[1:-1]  # Remove brackets
+                        break
+                if actual_ref_id is None:
+                    actual_ref_id = link_text.lower().strip()
+                link_data.append((i, match.start(), match.end(), link_text, url, title, 'implicit', actual_ref_id))
 
     # Convert links based on mode
     if use_inline:
-        # Convert all to inline format
-        for line_idx, start, end, link_text, url, title in reversed(link_data):
+        # Convert all to inline format (process in reverse to maintain positions)
+        link_data_reversed = sorted(link_data, key=lambda x: (x[0], x[1]), reverse=True)
+        for link_item in link_data_reversed:
+            line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
+            if not url:  # Skip if no URL
+                continue
             line = lines[line_idx]
             if title:
                 replacement = f'[{link_text}]({url} "{title}")'
@@ -2157,22 +2178,70 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
             lines[line_idx] = line[:start] + replacement + line[end:]
 
     elif use_reference:
-        # Assign reference numbers in document order
+        # Track text-based reference IDs and their URLs (for preserving existing refs)
+        text_ref_to_url = {}  # Maps ref_id -> (url, title)
+        # Track which text-based refs we've seen in the document (for ordering)
+        text_ref_order = []  # List of ref_ids in document order
+        
+        # Track numeric references for inline links only
         url_to_ref = {}  # Maps (url, title) -> ref_num
         next_ref = 1
 
-        for line_idx, start, end, link_text, url, title in link_data:
-            url_key = (url, title)
-            if url_key not in url_to_ref:
-                url_to_ref[url_key] = next_ref
-                next_ref += 1
+        # First pass: collect text-based reference IDs (including numeric ones)
+        for link_item in link_data:
+            line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
+            
+            if link_type == 'reference':
+                # Preserve existing reference links - track their ID and URL
+                if ref_id and url:  # Only if we have both
+                    text_ref_to_url[ref_id] = (url, title)
+                    if ref_id not in text_ref_order:
+                        text_ref_order.append(ref_id)
+            elif link_type == 'implicit':
+                # Preserve implicit reference links - track their ID and URL
+                if ref_id and url:  # Only if we have both
+                    text_ref_to_url[ref_id] = (url, title)
+                    if ref_id not in text_ref_order:
+                        text_ref_order.append(ref_id)
 
-        # Replace links with numeric references (process in reverse to maintain positions)
+        # Determine the highest numeric ID used in text-based references
+        # This ensures we don't duplicate numeric IDs when assigning to inline links
+        used_numeric_ids = set()
+        for ref_id in text_ref_to_url.keys():
+            # Check if ref_id is a numeric string (like "1", "2", etc.)
+            try:
+                num_id = int(ref_id)
+                used_numeric_ids.add(num_id)
+            except ValueError:
+                # Not a numeric ID, ignore
+                pass
+
+        # Find the next available numeric ID (must be higher than any existing numeric ID)
+        if used_numeric_ids:
+            next_ref = max(used_numeric_ids) + 1
+
+        # Second pass: assign numeric references to inline links (skipping used numbers)
+        for link_item in link_data:
+            line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
+            
+            if link_type == 'inline':
+                # Only inline links get numeric references
+                if url:  # Only if we have a URL
+                    url_key = (url, title)
+                    if url_key not in url_to_ref:
+                        # Make sure we don't use a number that's already taken
+                        while next_ref in used_numeric_ids:
+                            next_ref += 1
+                        url_to_ref[url_key] = next_ref
+                        used_numeric_ids.add(next_ref)
+                        next_ref += 1
+
+        # Replace links (process in reverse to maintain positions)
         # Group links by line and sort by position (right to left for replacement)
-        # Use a set to track unique links by (line_idx, start, end) to avoid duplicates
         links_by_line = {}
         seen_links = set()  # Track (line_idx, start, end) to avoid duplicates
-        for line_idx, start, end, link_text, url, title in link_data:
+        for link_item in link_data:
+            line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
             link_key = (line_idx, start, end)
             if link_key in seen_links:
                 continue  # Skip duplicate links
@@ -2180,7 +2249,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
 
             if line_idx not in links_by_line:
                 links_by_line[line_idx] = []
-            links_by_line[line_idx].append((start, end, link_text, url, title))
+            links_by_line[line_idx].append((start, end, link_text, url, title, link_type, ref_id))
 
         for line_idx in sorted(links_by_line.keys(), reverse=True):
             line = lines[line_idx]
@@ -2189,21 +2258,32 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
 
             # Build new line by replacing from right to left
             # This ensures positions don't shift as we replace
-            # Track which positions we've already replaced to avoid duplicates
             replaced_ranges = set()  # Track (start, end) ranges we've replaced
             new_line = line
-            for start, end, link_text, url, title in line_links:
+            for link_item in line_links:
+                start, end, link_text, url, title, link_type, ref_id = link_item
                 # Skip if we've already replaced this exact range (avoid duplicates)
                 range_key = (start, end)
                 if range_key in replaced_ranges:
                     continue
                 replaced_ranges.add(range_key)
 
-                url_key = (url, title)
-                ref_num = url_to_ref[url_key]
-                replacement = f'[{link_text}][{ref_num}]'
+                if link_type == 'reference' and ref_id:
+                    # Preserve existing reference link
+                    replacement = f'[{link_text}][{ref_id}]'
+                elif link_type == 'implicit' and ref_id:
+                    # Preserve implicit reference link
+                    replacement = f'[{link_text}]'
+                elif link_type == 'inline' and url:
+                    # Convert inline link to numeric reference
+                    url_key = (url, title)
+                    ref_num = url_to_ref[url_key]
+                    replacement = f'[{link_text}][{ref_num}]'
+                else:
+                    # Skip links without valid data
+                    continue
+                    
                 # Replace from right to left to maintain positions
-                # Make sure we're replacing the ENTIRE link, not appending
                 new_line = new_line[:start] + replacement + new_line[end:]
 
             # Verify that if the original line was a list item, the new line is still a list item
@@ -2263,6 +2343,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
             lines[line_idx] = new_line
 
         # Add reference definitions
+        # Organize: text-based refs first (in document order), then numbered refs
         if place_at_beginning:
             # Place all definitions at the beginning
             # Remove any leading blank lines and front matter
@@ -2280,7 +2361,16 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                 lines.insert(insert_pos, '\n')
                 insert_pos += 1
 
-            # Add definitions in document order
+            # Add text-based reference definitions first (in document order)
+            for ref_id in text_ref_order:
+                url, title = text_ref_to_url[ref_id]
+                if title:
+                    lines.insert(insert_pos, f'[{ref_id}]: {url} "{title}"\n')
+                else:
+                    lines.insert(insert_pos, f'[{ref_id}]: {url}\n')
+                insert_pos += 1
+
+            # Add numeric reference definitions next (in order)
             if url_to_ref:
                 for (url, title), ref_num in sorted(url_to_ref.items(), key=lambda x: x[1]):
                     if title:
@@ -2289,16 +2379,27 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                         lines.insert(insert_pos, f'[{ref_num}]: {url}\n')
                     insert_pos += 1
 
-                # Add blank line after definitions
-                if insert_pos < len(lines) and lines[insert_pos].strip():
-                    lines.insert(insert_pos, '\n')
+            # Add blank line after definitions
+            if (text_ref_to_url or url_to_ref) and insert_pos < len(lines) and lines[insert_pos].strip():
+                lines.insert(insert_pos, '\n')
         else:
             # Place all definitions at bottom (default behavior)
             while lines and not lines[-1].strip():
                 lines.pop()
 
-            if url_to_ref:
+            if text_ref_to_url or url_to_ref:
                 lines.append('\n')
+                
+            # Add text-based reference definitions first (in document order)
+            for ref_id in text_ref_order:
+                url, title = text_ref_to_url[ref_id]
+                if title:
+                    lines.append(f'[{ref_id}]: {url} "{title}"\n')
+                else:
+                    lines.append(f'[{ref_id}]: {url}\n')
+
+            # Add numeric reference definitions next (in order)
+            if url_to_ref:
                 for (url, title), ref_num in sorted(url_to_ref.items(), key=lambda x: x[1]):
                     if title:
                         lines.append(f'[{ref_num}]: {url} "{title}"\n')

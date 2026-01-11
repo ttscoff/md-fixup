@@ -1,0 +1,4 @@
+- Links inside
+  - Nested list [items](https://example.com/items)
+  - Should be placed [outside](https://example.com/outside)
+- The top level list

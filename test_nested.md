@@ -1,0 +1,5 @@
+- Links inside
+  - Nested list [items](https://example.com/items)
+  - Should be placed [outside](https://example.com/outside)
+- The top level list
+- Links that are [repeated](https://example.com/repeated) should reference their previous occurence.

@@ -1174,8 +1174,8 @@ fn normalize_typography(line: &str, skip_em_dash: bool, skip_guillemet: bool) ->
     let mut result = line.to_string();
 
     // Curly quotes to straight quotes
-    result = result.replace('\u{201C}', "\"").replace('\u{201D}', "\""); // Left/Right double quote
-    result = result.replace('\u{2018}', "'").replace('\u{2019}', "'"); // Left/Right single quote
+    result = result.replace(['\u{201C}', '\u{201D}'], "\""); // Left/Right double quote
+    result = result.replace(['\u{2018}', '\u{2019}'], "'"); // Left/Right single quote
     result = result.replace('\u{2013}', "--"); // En dash
 
     if !skip_em_dash {
@@ -1185,7 +1185,7 @@ fn normalize_typography(line: &str, skip_em_dash: bool, skip_guillemet: bool) ->
     result = result.replace('\u{2026}', "..."); // Ellipsis
 
     if !skip_guillemet {
-        result = result.replace('\u{00AB}', "\"").replace('\u{00BB}', "\""); // Guillemets
+        result = result.replace(['\u{00AB}', '\u{00BB}'], "\""); // Guillemets
     }
 
     result
@@ -1759,8 +1759,8 @@ fn detect_list_indent_unit(lines: &[String], start_idx: usize) -> usize {
         }
     }
 
-    for i in (list_start + 1)..lines.len() {
-        let line = &lines[i];
+    let list_item_re2 = Regex::new(r"^(\s*)([-*+]|\d+\.)").unwrap();
+    for line in lines.iter().skip(list_start + 1) {
         if !is_list_item(line) {
             if !line.trim().is_empty() {
                 break;
@@ -1768,8 +1768,7 @@ fn detect_list_indent_unit(lines: &[String], start_idx: usize) -> usize {
             continue;
         }
 
-        let re = Regex::new(r"^(\s*)([-*+]|\d+\.)").unwrap();
-        if let Some(caps) = re.captures(line) {
+        if let Some(caps) = list_item_re2.captures(line) {
             let indent = caps.get(1).unwrap().as_str();
             let space_count = indent.chars().filter(|&c| c != '\t').count();
             if space_count >= 2 {
@@ -1929,7 +1928,7 @@ fn normalize_list_markers(
         }
     };
 
-    let changed = marker != &new_marker;
+    let changed = marker != new_marker;
     let normalized = if has_newline {
         format!("{}{}{}{}\n", indent, new_marker, marker_space, content)
     } else {
@@ -2266,12 +2265,13 @@ fn convert_links_in_document(
                 // Only inline links get numeric references
                 if !link.url.is_empty() {
                     let url_key = (link.url.clone(), link.title.clone());
-                    if !url_to_ref.contains_key(&url_key) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = url_to_ref.entry(url_key)
+                    {
                         // Make sure we don't use a number that's already taken
                         while used_numeric_ids.contains(&next_ref) {
                             next_ref += 1;
                         }
-                        url_to_ref.insert(url_key, next_ref);
+                        e.insert(next_ref);
                         used_numeric_ids.insert(next_ref);
                         next_ref += 1;
                     }
@@ -2295,7 +2295,7 @@ fn convert_links_in_document(
 
             links_by_line
                 .entry(link.line_idx)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((link.start, link.end, link));
         }
 
@@ -2409,9 +2409,9 @@ fn convert_links_in_document(
             // Skip YAML front matter if present
             if !lines.is_empty() && lines[0].trim() == "---" {
                 // Find end of front matter
-                for i in 1..lines.len() {
-                    if lines[i].trim() == "---" {
-                        insert_pos = i + 1;
+                for (idx, line) in lines.iter().enumerate().skip(1) {
+                    if line.trim() == "---" {
+                        insert_pos = idx + 1;
                         break;
                     }
                 }
@@ -2910,11 +2910,13 @@ fn process_file(
 
             output.push(line.clone());
 
-            if !skip_rules.contains(&7) {
-                if !in_code_block && i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
-                    output.push("\n".to_string());
-                    changes_made = true;
-                }
+            if !skip_rules.contains(&7)
+                && !in_code_block
+                && i + 1 < lines.len()
+                && !lines[i + 1].trim().is_empty()
+            {
+                output.push("\n".to_string());
+                changes_made = true;
             }
 
             i += 1;
@@ -2930,13 +2932,11 @@ fn process_file(
         }
 
         // Normalize emoji names
-        if !skip_rules.contains(&23) {
-            if !in_math_block {
-                let normalized_emoji = normalize_emoji_names(&line, &valid_emoji_set);
-                if normalized_emoji != line {
-                    line = normalized_emoji;
-                    changes_made = true;
-                }
+        if !skip_rules.contains(&23) && !in_math_block {
+            let normalized_emoji = normalize_emoji_names(&line, &valid_emoji_set);
+            if normalized_emoji != line {
+                line = normalized_emoji;
+                changes_made = true;
             }
         }
 
@@ -3055,46 +3055,46 @@ fn process_file(
         let stripped = line.trim();
 
         // Handle table normalization
-        if !skip_rules.contains(&22) {
-            if stripped.contains('|') && !is_code_block(&line) && !in_math_block {
-                let mut table_lines = Vec::new();
-                let table_start = i;
-                let mut j = i;
+        if !skip_rules.contains(&22)
+            && stripped.contains('|')
+            && !is_code_block(&line)
+            && !in_math_block
+        {
+            let mut table_lines = Vec::new();
+            let table_start = i;
+            let mut j = i;
 
-                while j < lines.len() {
-                    let current_line = &lines[j];
-                    let current_stripped = current_line.trim();
+            while j < lines.len() {
+                let current_line = &lines[j];
+                let current_stripped = current_line.trim();
 
-                    if current_stripped.is_empty() {
-                        break;
-                    }
-
-                    if is_code_block(current_line) {
-                        break;
-                    }
-
-                    if current_stripped.contains('|') {
-                        table_lines.push(current_line.clone());
-                        j += 1;
-                    } else {
-                        break;
-                    }
+                if current_stripped.is_empty() {
+                    break;
                 }
 
-                if table_lines.len() >= 2 {
-                    if let Some(normalized_table) = normalize_table_formatting(&table_lines) {
-                        for (k, norm_line) in normalized_table.iter().enumerate() {
-                            if table_start + k < lines.len() {
-                                if lines[table_start + k] != *norm_line {
-                                    changes_made = true;
-                                }
-                            }
+                if is_code_block(current_line) {
+                    break;
+                }
+
+                if current_stripped.contains('|') {
+                    table_lines.push(current_line.clone());
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if table_lines.len() >= 2 {
+                if let Some(normalized_table) = normalize_table_formatting(&table_lines) {
+                    for (k, norm_line) in normalized_table.iter().enumerate() {
+                        if table_start + k < lines.len() && lines[table_start + k] != *norm_line {
+                            changes_made = true;
                         }
-                        output.extend(normalized_table);
-                        i = j;
-                        consecutive_blank_lines = 0;
-                        continue;
                     }
+                    output.extend(normalized_table);
+                    i = j;
+                    consecutive_blank_lines = 0;
+                    continue;
                 }
             }
         }
@@ -3115,18 +3115,14 @@ fn process_file(
 
             output.push(line.clone());
 
-            if !skip_rules.contains(&5) {
-                if i + 1 < lines.len() {
-                    let next_line = &lines[i + 1];
-                    if !next_line.trim().is_empty()
-                        && !is_headline(next_line)
-                        && !is_code_block(next_line)
-                    {
-                        if !next_line.trim().is_empty() {
-                            output.push("\n".to_string());
-                            changes_made = true;
-                        }
-                    }
+            if !skip_rules.contains(&5) && i + 1 < lines.len() {
+                let next_line = &lines[i + 1];
+                if !next_line.trim().is_empty()
+                    && !is_headline(next_line)
+                    && !is_code_block(next_line)
+                {
+                    output.push("\n".to_string());
+                    changes_made = true;
                 }
             }
 
@@ -3141,20 +3137,19 @@ fn process_file(
             list_context_stack.clear();
             current_list_indent_unit = None;
 
-            if !skip_rules.contains(&10) {
-                if !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
-                    output.push("\n".to_string());
-                    changes_made = true;
-                }
+            if !skip_rules.contains(&10)
+                && !output.is_empty()
+                && !output[output.len() - 1].trim().is_empty()
+            {
+                output.push("\n".to_string());
+                changes_made = true;
             }
 
             output.push(line.clone());
 
-            if !skip_rules.contains(&11) {
-                if i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
-                    output.push("\n".to_string());
-                    changes_made = true;
-                }
+            if !skip_rules.contains(&11) && i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
+                output.push("\n".to_string());
+                changes_made = true;
             }
 
             consecutive_blank_lines = 0;
@@ -3273,15 +3268,16 @@ fn process_file(
 
             let list_indent = get_list_indent(&line);
 
-            if !skip_rules.contains(&8) {
-                if !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
-                    let prev_line = &output[output.len() - 1];
-                    if !is_list_item(prev_line) {
-                        let prev_stripped = prev_line.trim();
-                        if !prev_stripped.starts_with('>') && !prev_stripped.starts_with('#') {
-                            output.push("\n".to_string());
-                            changes_made = true;
-                        }
+            if !skip_rules.contains(&8)
+                && !output.is_empty()
+                && !output[output.len() - 1].trim().is_empty()
+            {
+                let prev_line = &output[output.len() - 1];
+                if !is_list_item(prev_line) {
+                    let prev_stripped = prev_line.trim();
+                    if !prev_stripped.starts_with('>') && !prev_stripped.starts_with('#') {
+                        output.push("\n".to_string());
+                        changes_made = true;
                     }
                 }
             }
@@ -3354,27 +3350,15 @@ fn process_file(
                         if next_indent <= list_indent && !next_line.trim().starts_with('>') {
                             // Check if we need a blank line - handled in next iteration
                         }
-                    } else if next_line.trim().is_empty() {
-                        // Blank line - might be end of list
                     }
+                    // else if next_line.trim().is_empty() - blank line, might be end of list
                 } else {
                     current_list_indent_unit = None;
                     list_context_stack.clear();
                 }
             } else {
-                if i + 1 < lines.len() {
-                    let next_line = &lines[i + 1];
-                    if !next_line.trim().is_empty() && !is_list_item(next_line) {
-                        current_list_indent_unit = None;
-                        list_context_stack.clear();
-                    } else {
-                        current_list_indent_unit = None;
-                        list_context_stack.clear();
-                    }
-                } else {
-                    current_list_indent_unit = None;
-                    list_context_stack.clear();
-                }
+                current_list_indent_unit = None;
+                list_context_stack.clear();
             }
 
             i += 1;

@@ -2044,6 +2044,9 @@ fn convert_links_in_document(
     let mut matched_positions: std::collections::HashSet<(usize, usize, usize)> =
         std::collections::HashSet::new();
 
+    // Regex to extract URL and optional title from inline links - compiled once outside loop
+    let url_title_re_inline = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
+
     for (i, line) in lines.iter().enumerate() {
         // Track code blocks
         if is_code_block(line) {
@@ -2056,7 +2059,6 @@ fn convert_links_in_document(
         }
 
         // Find inline links: [text](url) or [text](url "title")
-        let url_title_re_inline = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
         for cap in inline_pattern.captures_iter(line) {
             let m = cap.get(0).unwrap();
             if is_in_code_span(line, m.start()) {

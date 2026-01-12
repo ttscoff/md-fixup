@@ -46,7 +46,7 @@ try:
 except ImportError:
     yaml = None
 
-VERSION = "0.1.21"
+VERSION = "0.1.22"
 DEFAULT_WRAP_WIDTH = 60
 
 # Valid GitHub emoji names (normalized: lowercase, hyphens to underscores, sorted, deduplicated)

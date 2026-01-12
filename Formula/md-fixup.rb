@@ -21,8 +21,13 @@ class MdFixup < Formula
       sha256 "aarch64-apple-darwin-sha256-here"
     end
   else
-    url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "x86_64-unknown-linux-gnu-sha256-here"
+    if Hardware::CPU.intel?
+      url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "x86_64-unknown-linux-gnu-sha256-here"
+    else
+      url "https://github.com/yourusername/md-fixup/releases/download/v0.1.0/md-fixup-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "aarch64-unknown-linux-gnu-sha256-here"
+    end
   end
 
   def install

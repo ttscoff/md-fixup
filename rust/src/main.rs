@@ -1738,6 +1738,7 @@ fn normalize_table_formatting(table_lines: &[String]) -> Option<Vec<String>> {
 
 fn detect_list_indent_unit(lines: &[String], start_idx: usize) -> usize {
     let mut list_start = start_idx;
+    let list_item_re = Regex::new(r"^(\s*)([-*+]|\d+\.)").unwrap();
 
     for i in (0..=start_idx).rev() {
         if i >= lines.len() {
@@ -1748,8 +1749,7 @@ fn detect_list_indent_unit(lines: &[String], start_idx: usize) -> usize {
             list_start = i + 1;
             break;
         }
-        let re = Regex::new(r"^(\s*)([-*+]|\d+\.)").unwrap();
-        if let Some(caps) = re.captures(line) {
+        if let Some(caps) = list_item_re.captures(line) {
             let indent = caps.get(1).unwrap().as_str();
             let space_count = indent.chars().filter(|&c| c != '\t').count();
             if space_count == 0 {
@@ -1981,6 +1981,7 @@ fn convert_links_in_document(
         std::collections::HashMap::new();
     let mut ref_def_lines: Vec<usize> = Vec::new();
 
+    let url_title_re = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
     for (i, line) in lines.iter().enumerate() {
         let stripped = line.trim();
         if let Some(caps) = ref_def_pattern.captures(stripped) {
@@ -1988,7 +1989,6 @@ fn convert_links_in_document(
             let url_part = caps.get(2).unwrap().as_str().trim();
 
             // Extract URL and optional title
-            let url_title_re = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
             let (url, title) = if let Some(url_caps) = url_title_re.captures(url_part) {
                 let url = url_caps.get(1).unwrap().as_str().to_string();
                 let title = url_caps.get(2).map(|m| m.as_str().to_string());
@@ -2056,6 +2056,7 @@ fn convert_links_in_document(
         }
 
         // Find inline links: [text](url) or [text](url "title")
+        let url_title_re_inline = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
         for cap in inline_pattern.captures_iter(line) {
             let m = cap.get(0).unwrap();
             if is_in_code_span(line, m.start()) {
@@ -2071,8 +2072,7 @@ fn convert_links_in_document(
             let url_part = cap.get(2).unwrap().as_str();
 
             // Extract URL and title
-            let url_title_re = Regex::new(r#"^([^\s"]+)(?:\s+"([^"]+)")?$"#).unwrap();
-            let (url, title) = if let Some(url_caps) = url_title_re.captures(url_part) {
+            let (url, title) = if let Some(url_caps) = url_title_re_inline.captures(url_part) {
                 let url = url_caps.get(1).unwrap().as_str().to_string();
                 let title = url_caps.get(2).map(|m| m.as_str().to_string());
                 (url, title)
@@ -2299,6 +2299,8 @@ fn convert_links_in_document(
                 .push((link.start, link.end, link));
         }
 
+        let list_re = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
+        let marker_re = Regex::new(r"^[-*+]|\d+\.\s*").unwrap();
         for line_idx in links_by_line
             .keys()
             .copied()
@@ -2345,7 +2347,6 @@ fn convert_links_in_document(
 
             // Verify that if the original line was a list item, the new line is still a list item
             if is_list_item(&line) {
-                let list_re = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
                 if let Some(orig_caps) = list_re.captures(&line) {
                     let orig_indent = orig_caps.get(1).unwrap().as_str();
                     let orig_marker = orig_caps.get(2).unwrap().as_str();
@@ -2379,11 +2380,8 @@ fn convert_links_in_document(
                         }
                         .trim_start();
                         // Remove any marker that might be at the start
-                        let new_content = Regex::new(r"^[-*+]|\d+\.\s*")
-                            .unwrap()
-                            .replace(new_content, "")
-                            .trim_start()
-                            .to_string();
+                        let new_content =
+                            marker_re.replace(new_content, "").trim_start().to_string();
 
                         // Reconstruct the line with original structure
                         new_line = format!(
@@ -2848,6 +2846,8 @@ fn process_file(
     let mut list_context_stack: Vec<ListContext> = Vec::new();
     let valid_emoji_set = valid_emoji_names_set();
 
+    let list_item_re_main = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
+    let numbered_marker_re = Regex::new(r"^\d+\.$").unwrap();
     while i < lines.len() {
         let mut line = lines[i].clone();
 
@@ -3181,13 +3181,10 @@ fn process_file(
             // Check for CommonMark interrupted list: bullet <-> numbered at same level
             // Do this BEFORE normalization so we can detect the original marker types
             let line_no_nl = line.trim_end_matches('\n');
-            let re_current_orig = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
-            if let Some(caps) = re_current_orig.captures(line_no_nl) {
+            if let Some(caps) = list_item_re_main.captures(line_no_nl) {
                 let current_indent_str = caps.get(1).unwrap().as_str();
                 let current_marker_orig = caps.get(2).unwrap().as_str();
-                let current_is_numbered_orig = Regex::new(r"^\d+\.$")
-                    .unwrap()
-                    .is_match(current_marker_orig);
+                let current_is_numbered_orig = numbered_marker_re.is_match(current_marker_orig);
 
                 // Check previous output line (skip blank lines)
                 let mut prev_line: Option<&String> = None;
@@ -3201,12 +3198,10 @@ fn process_file(
                 if let Some(prev) = prev_line {
                     if is_list_item(prev) {
                         let prev_no_nl = prev.trim_end_matches('\n');
-                        let re_prev = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
-                        if let Some(prev_caps) = re_prev.captures(prev_no_nl) {
+                        if let Some(prev_caps) = list_item_re_main.captures(prev_no_nl) {
                             let prev_indent_str = prev_caps.get(1).unwrap().as_str();
                             let prev_marker = prev_caps.get(2).unwrap().as_str();
-                            let prev_is_numbered =
-                                Regex::new(r"^\d+\.$").unwrap().is_match(prev_marker);
+                            let prev_is_numbered = numbered_marker_re.is_match(prev_marker);
 
                             // Compare normalized indentation levels, not raw character counts
                             let indent_unit = current_list_indent_unit
@@ -3282,8 +3277,7 @@ fn process_file(
                 }
             }
 
-            let re = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
-            if let Some(caps) = re.captures(&line) {
+            if let Some(caps) = list_item_re_main.captures(&line) {
                 let indent = caps.get(1).unwrap().as_str().to_string();
                 let marker = caps.get(2).unwrap().as_str().to_string();
                 let marker_space_str = caps.get(3).unwrap().as_str();

@@ -1388,14 +1388,18 @@ fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
                 let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
                 // Check if this starts with *** (triple asterisk) - if so, it's a bold-italic pattern
-                let is_triple_start = start + 2 < result_bytes.len() && result_bytes[start + 2] == b'*';
+                let is_triple_start =
+                    start + 2 < result_bytes.len() && result_bytes[start + 2] == b'*';
 
                 // Only skip if:
                 // 1. Preceded by * (part of larger pattern like ***text***)
                 // 2. Starts with *** AND followed by * (triple pattern ***text***)
                 // 3. Followed by _ (nested pattern like **_text_**)
                 // Otherwise, process it as regular bold (even if followed by *, it's just trailing)
-                if preceded_by_star || (is_triple_start && followed_by_star) || followed_by_underscore {
+                if preceded_by_star
+                    || (is_triple_start && followed_by_star)
+                    || followed_by_underscore
+                {
                     // Keep original (this is a nested pattern like ***text*** or **_text_**)
                     new_result.push_str(full_match.as_str());
                 } else {
@@ -1997,7 +2001,10 @@ fn convert_links_in_document(
             ref_definitions.insert(ref_id.clone(), (url.clone(), title.clone()));
             // Also store normalized version for implicit links
             if ref_id.starts_with('[') && ref_id.ends_with(']') {
-                let ref_text = ref_id[1..ref_id.len() - 1].to_lowercase().trim().to_string();
+                let ref_text = ref_id[1..ref_id.len() - 1]
+                    .to_lowercase()
+                    .trim()
+                    .to_string();
                 let normalized_id = format!("[{}]", ref_text);
                 if normalized_id != ref_id {
                     ref_definitions.insert(normalized_id, (url, title));
@@ -2030,8 +2037,8 @@ fn convert_links_in_document(
         link_text: String,
         url: String,
         title: Option<String>,
-        link_type: String,  // "inline", "reference", "implicit"
-        ref_id: Option<String>,  // Original reference ID for 'reference' and 'implicit' types
+        link_type: String,      // "inline", "reference", "implicit"
+        ref_id: Option<String>, // Original reference ID for 'reference' and 'implicit' types
     }
 
     let mut link_data: Vec<LinkData> = Vec::new();
@@ -2127,7 +2134,8 @@ fn convert_links_in_document(
             // Check if this position overlaps with a previously matched link
             let mut already_covered = false;
             for &(existing_line_idx, existing_start, existing_end) in &matched_positions {
-                if existing_line_idx == i && existing_start <= m.start() && m.start() < existing_end {
+                if existing_line_idx == i && existing_start <= m.start() && m.start() < existing_end
+                {
                     already_covered = true;
                     break;
                 }
@@ -2162,7 +2170,8 @@ fn convert_links_in_document(
                     }
                 }
                 // Fallback to normalized link text if no match found
-                let final_ref_id = actual_ref_id.unwrap_or_else(|| link_text.to_lowercase().trim().to_string());
+                let final_ref_id =
+                    actual_ref_id.unwrap_or_else(|| link_text.to_lowercase().trim().to_string());
                 link_data.push(LinkData {
                     line_idx: i,
                     start: m.start(),
@@ -2180,11 +2189,7 @@ fn convert_links_in_document(
     // Convert links based on mode
     if use_inline {
         // Convert all to inline format (process in reverse to maintain positions)
-        link_data.sort_by(|a, b| {
-            b.line_idx
-                .cmp(&a.line_idx)
-                .then(b.start.cmp(&a.start))
-        });
+        link_data.sort_by(|a, b| b.line_idx.cmp(&a.line_idx).then(b.start.cmp(&a.start)));
 
         for link in &link_data {
             let line = &lines[link.line_idx];
@@ -2217,7 +2222,8 @@ fn convert_links_in_document(
                 // Preserve existing reference links - track their ID and URL
                 if let Some(ref ref_id) = link.ref_id {
                     if !link.url.is_empty() {
-                        text_ref_to_url.insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
+                        text_ref_to_url
+                            .insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
                         if !text_ref_order.contains(ref_id) {
                             text_ref_order.push(ref_id.clone());
                         }
@@ -2227,7 +2233,8 @@ fn convert_links_in_document(
                 // Preserve implicit reference links - track their ID and URL
                 if let Some(ref ref_id) = link.ref_id {
                     if !link.url.is_empty() {
-                        text_ref_to_url.insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
+                        text_ref_to_url
+                            .insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
                         if !text_ref_order.contains(ref_id) {
                             text_ref_order.push(ref_id.clone());
                         }
@@ -2238,7 +2245,8 @@ fn convert_links_in_document(
 
         // Determine the highest numeric ID used in text-based references
         // This ensures we don't duplicate numeric IDs when assigning to inline links
-        let mut used_numeric_ids: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut used_numeric_ids: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
         for ref_id in text_ref_to_url.keys() {
             // Check if ref_id is a numeric string (like "1", "2", etc.)
             if let Ok(num_id) = ref_id.parse::<usize>() {
@@ -2291,7 +2299,13 @@ fn convert_links_in_document(
                 .push((link.start, link.end, link));
         }
 
-        for line_idx in links_by_line.keys().copied().collect::<Vec<_>>().into_iter().rev() {
+        for line_idx in links_by_line
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
             let line = lines[line_idx].clone();
             let mut line_links = links_by_line[&line_idx].clone();
             // Sort by start position, descending (right to left)
@@ -2356,7 +2370,8 @@ fn convert_links_in_document(
                         }
                     } else {
                         // The replacement broke the list structure - reconstruct it
-                        let marker_end_pos = orig_indent.len() + orig_marker.len() + orig_marker_space.len();
+                        let marker_end_pos =
+                            orig_indent.len() + orig_marker.len() + orig_marker_space.len();
                         let new_content = if new_line.len() < marker_end_pos {
                             new_line.trim_start()
                         } else {
@@ -2424,7 +2439,10 @@ fn convert_links_in_document(
             sorted_refs.sort_by_key(|(_, &ref_num)| ref_num);
             for ((url, title), &ref_num) in sorted_refs {
                 if let Some(title) = title {
-                    lines.insert(insert_pos, format!("[{}]: {} \"{}\"\n", ref_num, url, title));
+                    lines.insert(
+                        insert_pos,
+                        format!("[{}]: {} \"{}\"\n", ref_num, url, title),
+                    );
                 } else {
                     lines.insert(insert_pos, format!("[{}]: {}\n", ref_num, url));
                 }
@@ -3776,18 +3794,18 @@ Examples:
             if let Some(RulesList::All) = rules_config.skip.as_ref() {
                 // If skip: all, check if inline-links is in include list
                 if let Some(RulesList::List(ref include_list)) = rules_config.include.as_ref() {
-                    include_list.iter().any(|item| {
-                        item == "inline-links" || item.parse::<u8>().ok() == Some(30)
-                    })
+                    include_list
+                        .iter()
+                        .any(|item| item == "inline-links" || item.parse::<u8>().ok() == Some(30))
                 } else {
                     false
                 }
             } else {
                 // If not skip: all, check if inline-links is NOT in skip list
                 if let Some(RulesList::List(ref skip_list)) = rules_config.skip.as_ref() {
-                    !skip_list.iter().any(|item| {
-                        item == "inline-links" || item.parse::<u8>().ok() == Some(30)
-                    })
+                    !skip_list
+                        .iter()
+                        .any(|item| item == "inline-links" || item.parse::<u8>().ok() == Some(30))
                 } else {
                     // No skip list means rule 30 is enabled by default (but we want to disable it)
                     false
@@ -4192,7 +4210,7 @@ mod tests {
         let mut skip_rules = HashSet::new();
         skip_rules.insert(28); // Skip reference-links
         skip_rules.insert(29); // Skip links-at-end
-        // Rule 30 (inline-links) is enabled by not skipping it
+                               // Rule 30 (inline-links) is enabled by not skipping it
         skip_rules.remove(&30); // Enable inline-links
         let output = process_test_content_with_skip(input, &skip_rules);
         // Should convert to inline format
@@ -4277,7 +4295,9 @@ mod tests {
         assert!(output.contains("* Item 1") || output.contains("- Item 1"));
         // All should be normalized consistently
         let has_consistent_markers = output.contains("* Item 1")
-            || (output.contains("- Item 1") && output.contains("- Item 2") && output.contains("- Item 3"));
+            || (output.contains("- Item 1")
+                && output.contains("- Item 2")
+                && output.contains("- Item 3"));
         assert!(has_consistent_markers);
     }
 
@@ -4365,7 +4385,11 @@ mod tests {
         assert!(output.contains("[inline link][2]"));
         // Should not have duplicate [1] definitions
         let def_count = output.matches("[1]:").count();
-        assert_eq!(def_count, 1, "Should only have one [1]: definition, found {}", def_count);
+        assert_eq!(
+            def_count, 1,
+            "Should only have one [1]: definition, found {}",
+            def_count
+        );
         // Should have [2]: definition
         assert!(output.contains("[2]: https://example.com/inline"));
     }

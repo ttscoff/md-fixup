@@ -3397,8 +3397,8 @@ fn process_file(
                 }
 
                 let prefix = format!("{}{}{}", indent, marker, marker_space);
-                // Continuation indent is the original indent + one tab
-                let cont_indent = format!("{}\t", indent);
+                // Continuation indent is spaces equal to prefix length (aligns with content)
+                let cont_indent = " ".repeat(prefix.chars().count());
 
                 if !skip_rules.contains(&14) {
                     let line_len = line.trim_end().chars().count();
@@ -3414,7 +3414,7 @@ fn process_file(
                                 // First line gets the full list marker prefix
                                 output.push(format!("{}{}\n", prefix, wrapped_line));
                             } else {
-                                // Continuation lines get tab indent
+                                // Continuation lines get space indent to align with content
                                 output.push(format!("{}{}\n", cont_indent, wrapped_line));
                             }
                         }
@@ -3433,18 +3433,18 @@ fn process_file(
                 if i + 1 < lines.len() {
                     let next_line = &lines[i + 1];
                     if !next_line.trim().is_empty() && !is_list_item(next_line) {
+                        // Next line is not empty and not a list item - need blank line after list
+                        let next_indent = get_list_indent(next_line);
+                        // Only add blank line if next line is at same or lower indent level
+                        // (i.e., not a continuation of the list item)
+                        if next_indent <= list_indent && !next_line.trim().starts_with('>') {
+                            output.push("\n".to_string());
+                            changes_made = true;
+                        }
                         current_list_indent_unit = None;
                         list_context_stack.clear();
-                        let next_indent = if next_line.trim().is_empty() {
-                            0
-                        } else {
-                            get_list_indent(next_line)
-                        };
-                        if next_indent <= list_indent && !next_line.trim().starts_with('>') {
-                            // Check if we need a blank line - handled in next iteration
-                        }
                     }
-                    // else if next_line.trim().is_empty() - blank line, might be end of list
+                    // else if next_line.trim().is_empty() - blank line already exists
                 } else {
                     current_list_indent_unit = None;
                     list_context_stack.clear();
@@ -3454,6 +3454,7 @@ fn process_file(
                 list_context_stack.clear();
             }
 
+            consecutive_blank_lines = 0;
             i += 1;
             continue;
         }

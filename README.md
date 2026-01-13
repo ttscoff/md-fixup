@@ -36,6 +36,7 @@ md-fixup performs 27 different normalization and formatting rules:
 26. Normalizes list markers (renumber ordered lists, standardize bullet markers by level)
 27. Resets ordered lists to start at 1 (if disabled, preserves starting number)
 
+
 Table cleanup algorithm by [Dr. Drang](https://leancrew.com/).
 
 ## Installation

@@ -2510,7 +2510,8 @@ fn should_preserve_line(line: &str) -> bool {
                                   // Note: blank lines are NOT preserved here - they go through blank line compression
 }
 
-/// Tokenize text for wrapping, keeping markdown links and inline code as atomic units
+/// Tokenize text for wrapping, keeping markdown links as atomic units
+/// Code spans can break across lines, so they are not kept together
 fn tokenize_for_wrap(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -2552,43 +2553,6 @@ fn tokenize_for_wrap(text: &str) -> Vec<String> {
                 }
             }
             // Include any trailing punctuation attached to the link
-            while i < chars.len() && !chars[i].is_whitespace() {
-                i += 1;
-            }
-            tokens.push(chars[start..i].iter().collect());
-            continue;
-        }
-
-        // Check for inline code: `code` or ``code``
-        if chars[i] == '`' {
-            let backtick_count = {
-                let mut count = 0;
-                while i + count < chars.len() && chars[i + count] == '`' {
-                    count += 1;
-                }
-                count
-            };
-            i += backtick_count;
-            // Find closing backticks
-            let mut found_close = false;
-            while i < chars.len() {
-                if chars[i] == '`' {
-                    let mut close_count = 0;
-                    while i + close_count < chars.len() && chars[i + close_count] == '`' {
-                        close_count += 1;
-                    }
-                    if close_count == backtick_count {
-                        i += close_count;
-                        found_close = true;
-                        break;
-                    }
-                }
-                i += 1;
-            }
-            if !found_close {
-                i = start + 1; // Reset if no closing found
-            }
-            // Include any trailing punctuation attached to the code
             while i < chars.len() && !chars[i].is_whitespace() {
                 i += 1;
             }
@@ -3440,7 +3404,11 @@ fn process_file(
                     let line_len = line.trim_end().chars().count();
                     if line_len > wrap_width && !content.is_empty() {
                         // Wrap content without prefix, we'll add proper indentation ourselves
-                        let wrapped = wrap_text(&content, wrap_width.saturating_sub(prefix.chars().count()), "");
+                        let wrapped = wrap_text(
+                            &content,
+                            wrap_width.saturating_sub(prefix.chars().count()),
+                            "",
+                        );
                         for (j, wrapped_line) in wrapped.iter().enumerate() {
                             if j == 0 {
                                 // First line gets the full list marker prefix

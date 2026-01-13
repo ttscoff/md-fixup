@@ -2515,13 +2515,6 @@ fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
         return vec![text.to_string()];
     }
 
-    let long_link_re = Regex::new(r"\[.*?\]\([^)]{20,}\)").unwrap();
-    let long_code_re = Regex::new(r"`[^`]{20,}`").unwrap();
-
-    if long_link_re.is_match(text) || long_code_re.is_match(text) {
-        return vec![text.to_string()];
-    }
-
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut lines = Vec::new();
     let mut current_line = prefix.to_string();
@@ -3161,12 +3154,14 @@ fn process_file(
 
         // Don't wrap certain lines
         if should_preserve_line(&line) {
+            eprintln!("DEBUG: Preserving line: {:?}", line);
             output.push(line);
             i += 1;
             continue;
         }
 
         // Handle list items
+        eprintln!("DEBUG: Checking is_list_item for: {:?} = {}", line, is_list_item(&line));
         if is_list_item(&line) {
             if !skip_rules.contains(&19) {
                 let normalized_task = normalize_task_checkbox(&line);
@@ -3279,7 +3274,8 @@ fn process_file(
                 }
             }
 
-            if let Some(caps) = list_item_re_main.captures(&line) {
+            let line_for_capture = line.trim_end_matches("\n");
+            if let Some(caps) = list_item_re_main.captures(line_for_capture) {
                 let indent = caps.get(1).unwrap().as_str().to_string();
                 let marker = caps.get(2).unwrap().as_str().to_string();
                 let marker_space_str = caps.get(3).unwrap().as_str();
@@ -3304,21 +3300,23 @@ fn process_file(
                 }
 
                 let prefix = format!("{}{}{}", indent, marker, marker_space);
+                // Continuation indent is the original indent + one tab
+                let cont_indent = format!("{}\t", indent);
 
                 if !skip_rules.contains(&14) {
-                    if line.trim_end().chars().count() > wrap_width && !content.is_empty() {
-                        let wrapped = wrap_text(&content, wrap_width, &prefix);
+                    let line_len = line.trim_end().chars().count();
+                    eprintln!("DEBUG: List item len={}, wrap_width={}, content_len={}", line_len, wrap_width, content.len());
+                    if line_len > wrap_width && !content.is_empty() {
+                        eprintln!("DEBUG: Wrapping list item");
+                        // Wrap content without prefix, we'll add proper indentation ourselves
+                        let wrapped = wrap_text(&content, wrap_width.saturating_sub(prefix.chars().count()), "");
                         for (j, wrapped_line) in wrapped.iter().enumerate() {
-                            if j > 0 {
-                                let cont_indent = " ".repeat(prefix.chars().count());
-                                let cont_line = format!(
-                                    "{}{}",
-                                    cont_indent,
-                                    &wrapped_line[prefix.chars().count()..]
-                                );
-                                output.push(format!("{}\n", cont_line));
+                            if j == 0 {
+                                // First line gets the full list marker prefix
+                                output.push(format!("{}{}\n", prefix, wrapped_line));
                             } else {
-                                output.push(format!("{}\n", wrapped_line));
+                                // Continuation lines get tab indent
+                                output.push(format!("{}{}\n", cont_indent, wrapped_line));
                             }
                         }
                         changes_made = true;

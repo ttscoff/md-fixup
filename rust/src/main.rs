@@ -2834,12 +2834,20 @@ fn process_file(
     let mut output: Vec<String> = Vec::new();
     let mut in_code_block = false;
     let mut in_math_block = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_started = false;
     let mut i = 0;
     let mut changes_made = false;
     let mut consecutive_blank_lines = 0;
     let mut current_list_indent_unit: Option<usize> = None;
     let mut list_context_stack: Vec<ListContext> = Vec::new();
     let valid_emoji_set = valid_emoji_names_set();
+
+    // Check for YAML frontmatter at the start of the file
+    if !lines.is_empty() && lines[0].trim() == "---" {
+        in_frontmatter = true;
+        frontmatter_started = true;
+    }
 
     let list_item_re_main = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
     let numbered_marker_re = Regex::new(r"^\d+\.$").unwrap();
@@ -2858,6 +2866,37 @@ fn process_file(
                 line.push('\n');
                 changes_made = true;
             }
+        }
+
+        // Handle YAML frontmatter - pass through without modifications except line endings
+        if in_frontmatter {
+            let trimmed = line.trim();
+            // Check for end of frontmatter (--- or ... on its own line, but not the opening ---)
+            if frontmatter_started && i > 0 && (trimmed == "---" || trimmed == "...") {
+                // Before adding the closing fence, remove any trailing blank lines in frontmatter
+                while let Some(last_line) = output.last() {
+                    if last_line.trim().is_empty() {
+                        output.pop();
+                        changes_made = true;
+                    } else {
+                        break;
+                    }
+                }
+                in_frontmatter = false;
+                output.push(line);
+                i += 1;
+                continue;
+            }
+            // Skip blank lines immediately after the opening ---
+            if i == 1 && trimmed.is_empty() {
+                changes_made = true;
+                i += 1;
+                continue;
+            }
+            // Pass through frontmatter content as-is
+            output.push(line);
+            i += 1;
+            continue;
         }
 
         // Track code block state
@@ -3154,14 +3193,12 @@ fn process_file(
 
         // Don't wrap certain lines
         if should_preserve_line(&line) {
-            eprintln!("DEBUG: Preserving line: {:?}", line);
             output.push(line);
             i += 1;
             continue;
         }
 
         // Handle list items
-        eprintln!("DEBUG: Checking is_list_item for: {:?} = {}", line, is_list_item(&line));
         if is_list_item(&line) {
             if !skip_rules.contains(&19) {
                 let normalized_task = normalize_task_checkbox(&line);
@@ -3305,9 +3342,7 @@ fn process_file(
 
                 if !skip_rules.contains(&14) {
                     let line_len = line.trim_end().chars().count();
-                    eprintln!("DEBUG: List item len={}, wrap_width={}, content_len={}", line_len, wrap_width, content.len());
                     if line_len > wrap_width && !content.is_empty() {
-                        eprintln!("DEBUG: Wrapping list item");
                         // Wrap content without prefix, we'll add proper indentation ourselves
                         let wrapped = wrap_text(&content, wrap_width.saturating_sub(prefix.chars().count()), "");
                         for (j, wrapped_line) in wrapped.iter().enumerate() {

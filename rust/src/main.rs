@@ -2700,6 +2700,8 @@ struct Config {
     width: Option<usize>,
     overwrite: Option<bool>,
     rules: Option<RulesConfig>,
+    replacements: Option<bool>,
+    replacements_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2713,6 +2715,35 @@ struct RulesConfig {
 enum RulesList {
     All,
     List(Vec<String>),
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ReplacementTiming {
+    Before,
+    After,
+}
+
+fn default_timing() -> ReplacementTiming {
+    ReplacementTiming::After
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct Replacement {
+    name: String,
+    pattern: String,
+    replacement: String,
+    #[serde(default = "default_timing")]
+    timing: ReplacementTiming,
+    #[serde(default)]
+    in_code_blocks: bool,
+    #[serde(default)]
+    in_frontmatter: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplacementsFile {
+    replacements: Vec<Replacement>,
 }
 
 fn get_config_path() -> (PathBuf, Option<PathBuf>) {
@@ -2796,6 +2827,112 @@ fn load_config() -> Option<Config> {
     let config_file = config_file?;
     let content = fs::read_to_string(config_file).ok()?;
     serde_yaml::from_str(&content).ok()
+}
+
+fn expand_path(path_str: &str) -> PathBuf {
+    if path_str.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(&path_str[2..]);
+        }
+    }
+    PathBuf::from(path_str)
+}
+
+fn load_replacements(config: &Option<Config>, custom_file: &Option<String>) -> Option<Vec<Replacement>> {
+    // Determine which file to load
+    let replacements_file = if let Some(custom_file) = custom_file {
+        // CLI override
+        Some(expand_path(custom_file))
+    } else if let Some(ref cfg) = config {
+        if let Some(ref file_path) = cfg.replacements_file {
+            // Config override
+            Some(expand_path(file_path))
+        } else {
+            // Check for local override first
+            let local_file = PathBuf::from(".md-fixup-replacements");
+            if local_file.exists() {
+                Some(local_file)
+            } else {
+                // Default location
+                let (config_dir, _) = get_config_path();
+                let default_file = config_dir.join("replacements.yml");
+                if default_file.exists() {
+                    Some(default_file)
+                } else {
+                    None
+                }
+            }
+        }
+    } else {
+        // No config, check for local override
+        let local_file = PathBuf::from(".md-fixup-replacements");
+        if local_file.exists() {
+            Some(local_file)
+        } else {
+            // Default location
+            let (config_dir, _) = get_config_path();
+            let default_file = config_dir.join("replacements.yml");
+            if default_file.exists() {
+                Some(default_file)
+            } else {
+                None
+            }
+        }
+    };
+
+    let replacements_file = replacements_file?;
+    let content = fs::read_to_string(&replacements_file).ok()?;
+    let replacements_data: ReplacementsFile = serde_yaml::from_str(&content).ok()?;
+    
+    // Validate and compile regex patterns
+    let mut valid_replacements = Vec::new();
+    for replacement in replacements_data.replacements {
+        // Try to compile the regex to validate it
+        if Regex::new(&replacement.pattern).is_ok() {
+            valid_replacements.push(replacement);
+        } else {
+            eprintln!("Warning: Invalid regex pattern in replacement '{}', skipping", replacement.name);
+        }
+    }
+    
+    Some(valid_replacements)
+}
+
+fn apply_replacements(
+    line: &str,
+    replacements: &[Replacement],
+    timing: ReplacementTiming,
+    in_code_block: bool,
+    in_frontmatter: bool,
+) -> (String, bool) {
+    let mut result = line.to_string();
+    let mut changes_made = false;
+
+    for replacement in replacements {
+        // Check timing match
+        if replacement.timing != timing {
+            continue;
+        }
+
+        // Check context flags
+        if in_code_block && !replacement.in_code_blocks {
+            continue;
+        }
+        if in_frontmatter && !replacement.in_frontmatter {
+            continue;
+        }
+
+        // Compile and apply regex
+        if let Ok(regex) = Regex::new(&replacement.pattern) {
+            let new_result = regex.replace_all(&result, &replacement.replacement);
+            if new_result != result {
+                result = new_result.to_string();
+                changes_made = true;
+            }
+        }
+    }
+
+    (result, changes_made)
 }
 
 fn parse_config_rules(config: &Config) -> HashSet<u8> {
@@ -2886,6 +3023,7 @@ fn process_file(
     skip_em_dash: bool,
     skip_guillemet: bool,
     reverse_emphasis: bool,
+    replacements: &[Replacement],
 ) -> Result<bool, String> {
     let content =
         fs::read_to_string(filepath).map_err(|e| format!("Error reading {}: {}", filepath, e))?;
@@ -2924,6 +3062,21 @@ fn process_file(
                 changes_made = true;
             } else if !line.ends_with('\n') {
                 line.push('\n');
+                changes_made = true;
+            }
+        }
+
+        // Apply "before" replacements (early in processing)
+        if !replacements.is_empty() {
+            let (new_line, changed) = apply_replacements(
+                &line,
+                replacements,
+                ReplacementTiming::Before,
+                in_code_block,
+                in_frontmatter,
+            );
+            if changed {
+                line = new_line;
                 changes_made = true;
             }
         }
@@ -3239,6 +3392,21 @@ fn process_file(
                 changes_made = true;
             }
 
+            // Apply "after" replacements for blank lines
+            if !replacements.is_empty() {
+                let (new_line, changed) = apply_replacements(
+                    &line,
+                    replacements,
+                    ReplacementTiming::After,
+                    in_code_block,
+                    in_frontmatter,
+                );
+                if changed {
+                    line = new_line;
+                    changes_made = true;
+                }
+            }
+
             output.push(line.clone());
 
             if !skip_rules.contains(&11) && i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
@@ -3253,6 +3421,20 @@ fn process_file(
 
         // Don't wrap certain lines
         if should_preserve_line(&line) {
+            // Apply "after" replacements for preserved lines
+            if !replacements.is_empty() {
+                let (new_line, changed) = apply_replacements(
+                    &line,
+                    replacements,
+                    ReplacementTiming::After,
+                    in_code_block,
+                    in_frontmatter,
+                );
+                if changed {
+                    line = new_line;
+                    changes_made = true;
+                }
+            }
             output.push(line);
             i += 1;
             continue;
@@ -3526,6 +3708,21 @@ fn process_file(
                 }
             }
 
+            // Apply "after" replacements (late in processing, before output)
+            if !replacements.is_empty() {
+                let (new_line, changed) = apply_replacements(
+                    &line,
+                    replacements,
+                    ReplacementTiming::After,
+                    in_code_block,
+                    in_frontmatter,
+                );
+                if changed {
+                    line = new_line;
+                    changes_made = true;
+                }
+            }
+
             if !skip_rules.contains(&14) {
                 if line.trim_end().chars().count() > wrap_width {
                     let stripped = line.trim();
@@ -3706,6 +3903,24 @@ fn main() {
                 .long("reverse-emphasis")
                 .help("Reverse emphasis markers: use ** for bold and _ for italic (instead of __ for bold and * for italic)")
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("replacements")
+                .long("replacements")
+                .help("Enable custom regex replacements (enabled by default if replacements file exists)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("no-replacements")
+                .long("no-replacements")
+                .help("Disable custom regex replacements")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("replacement-file")
+                .long("replacement-file")
+                .value_name("FILE")
+                .help("Path to custom replacements YAML file")
         )
         .arg(
             Arg::new("files")
@@ -3919,6 +4134,37 @@ Examples:
 
     let reverse_emphasis = matches.get_flag("reverse-emphasis");
 
+    // Handle replacements
+    let replacement_file_override = matches.get_one::<String>("replacement-file").map(|s| s.clone());
+    let replacements_enabled_cli = if matches.get_flag("no-replacements") {
+        Some(false)
+    } else if matches.get_flag("replacements") {
+        Some(true)
+    } else {
+        None
+    };
+
+    // Determine if replacements should be enabled
+    // Precedence: CLI > Config > Default (enabled if file exists)
+    let replacements_enabled = if let Some(cli_enabled) = replacements_enabled_cli {
+        cli_enabled
+    } else if let Some(ref cfg) = config {
+        cfg.replacements.unwrap_or_else(|| {
+            // Default: enabled if file exists
+            load_replacements(&config, &replacement_file_override).is_some()
+        })
+    } else {
+        // No config, check if file exists
+        load_replacements(&None, &replacement_file_override).is_some()
+    };
+
+    // Load replacements if enabled
+    let replacements = if replacements_enabled {
+        load_replacements(&config, &replacement_file_override).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let mut files: Vec<String> = if let Some(file_args) = matches.get_many::<String>("files") {
         file_args.map(|s| s.to_string()).collect()
     } else {
@@ -3993,6 +4239,7 @@ Examples:
                     skip_em_dash,
                     skip_guillemet,
                     reverse_emphasis,
+                    &replacements,
                 ) {
                     Ok(_) => {
                         // process_file already printed to stdout when overwrite=false
@@ -4031,6 +4278,7 @@ Examples:
                 skip_em_dash,
                 skip_guillemet,
                 reverse_emphasis,
+                &replacements,
             ) {
                 Ok(true) => changed_files.push(filepath.clone()),
                 Ok(false) => {}
@@ -4058,6 +4306,7 @@ Examples:
                 skip_em_dash,
                 skip_guillemet,
                 reverse_emphasis,
+                &replacements,
             ) {
                 eprintln!("{}", e);
             }
@@ -4082,7 +4331,7 @@ mod tests {
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
         // Use overwrite=true so the file is actually modified
-        process_file(path, 60, true, &skip_rules, false, false, false).unwrap();
+        process_file(path, 60, true, &skip_rules, false, false, false, &[]).unwrap();
 
         fs::read_to_string(path).unwrap()
     }
@@ -4256,7 +4505,7 @@ mod tests {
 
         let skip_rules = HashSet::new();
         // Use overwrite=true so the file is actually modified
-        process_file(path, width, true, &skip_rules, false, false, false).unwrap();
+        process_file(path, width, true, &skip_rules, false, false, false, &[]).unwrap();
 
         fs::read_to_string(path).unwrap()
     }
@@ -4268,7 +4517,7 @@ mod tests {
         let path = file.path().to_str().unwrap();
 
         // Use overwrite=true so the file is actually modified
-        process_file(path, 60, true, skip_rules, false, false, false).unwrap();
+        process_file(path, 60, true, skip_rules, false, false, false, &[]).unwrap();
 
         fs::read_to_string(path).unwrap()
     }
@@ -4470,5 +4719,120 @@ mod tests {
         );
         // Should have [2]: definition
         assert!(output.contains("[2]: https://example.com/inline"));
+    }
+
+    #[test]
+    fn test_apply_replacements_before() {
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+        let (result, changed) = apply_replacements(
+            "foo bar",
+            &replacements,
+            ReplacementTiming::Before,
+            false,
+            false,
+        );
+        assert!(changed);
+        assert_eq!(result, "bar bar");
+    }
+
+    #[test]
+    fn test_apply_replacements_after() {
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::After,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+        let (result, changed) = apply_replacements(
+            "foo bar",
+            &replacements,
+            ReplacementTiming::After,
+            false,
+            false,
+        );
+        assert!(changed);
+        assert_eq!(result, "bar bar");
+    }
+
+    #[test]
+    fn test_apply_replacements_timing_mismatch() {
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+        let (result, changed) = apply_replacements(
+            "foo bar",
+            &replacements,
+            ReplacementTiming::After,
+            false,
+            false,
+        );
+        assert!(!changed);
+        assert_eq!(result, "foo bar");
+    }
+
+    #[test]
+    fn test_apply_replacements_code_block_filtering() {
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+        let (result, changed) = apply_replacements(
+            "foo bar",
+            &replacements,
+            ReplacementTiming::Before,
+            true, // in_code_block
+            false,
+        );
+        assert!(!changed);
+        assert_eq!(result, "foo bar");
+    }
+
+    #[test]
+    fn test_apply_replacements_with_capture_groups() {
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: r"(\d+)\.(\d+)".to_string(),
+                replacement: "$2.$1".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+        let (result, changed) = apply_replacements(
+            "Version 1.2 is released",
+            &replacements,
+            ReplacementTiming::Before,
+            false,
+            false,
+        );
+        assert!(changed);
+        assert_eq!(result, "Version 2.1 is released");
     }
 }

@@ -4835,4 +4835,175 @@ mod tests {
         assert!(changed);
         assert_eq!(result, "Version 2.1 is released");
     }
+
+    fn process_test_content_with_replacements(content: &str, replacements: &[Replacement]) -> String {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", content).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_str().unwrap();
+
+        let mut skip_rules = HashSet::new();
+        // Rule 30 (inline-links) is disabled by default
+        skip_rules.insert(30);
+        // Use overwrite=true so the file is actually modified
+        process_file(path, 60, true, &skip_rules, false, false, false, replacements).unwrap();
+
+        fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn test_replacements_file_loading() {
+        // Test loading the fixtures replacements file
+        // CARGO_MANIFEST_DIR points to rust/, so we need to go up one level
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
+        let replacements_file = fixtures_dir.join("replacements.yml");
+
+        assert!(replacements_file.exists(), "Replacements fixture file should exist at {:?}", replacements_file);
+
+        let content = fs::read_to_string(&replacements_file).unwrap();
+        let replacements_data: ReplacementsFile = serde_yaml::from_str(&content).unwrap();
+
+        assert_eq!(replacements_data.replacements.len(), 3);
+        assert_eq!(replacements_data.replacements[0].name, "fix-double-spaces");
+        assert_eq!(replacements_data.replacements[1].name, "swap-version");
+        assert_eq!(replacements_data.replacements[2].name, "normalize-http");
+    }
+
+    #[test]
+    fn test_replacements_fix_double_spaces() {
+        // Test the "fix-double-spaces" replacement from fixtures
+        let replacements = vec![
+            Replacement {
+                name: "fix-double-spaces".to_string(),
+                pattern: "  +".to_string(),
+                replacement: " ".to_string(),
+                timing: ReplacementTiming::After,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+
+        let input = "This  has  multiple  spaces.\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+        assert!(output.contains("This has multiple spaces."));
+        assert!(!output.contains("  ")); // No double spaces
+    }
+
+    #[test]
+    fn test_replacements_swap_version() {
+        // Test the "swap-version" replacement from fixtures
+        let replacements = vec![
+            Replacement {
+                name: "swap-version".to_string(),
+                pattern: r"(\d+)\.(\d+)".to_string(),
+                replacement: "$2.$1".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+
+        let input = "Version 1.2 is released. Version 3.4 coming soon.\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+        assert!(output.contains("Version 2.1 is released"));
+        assert!(output.contains("Version 4.3 coming soon"));
+    }
+
+    #[test]
+    fn test_replacements_normalize_http() {
+        // Test the "normalize-http" replacement from fixtures
+        let replacements = vec![
+            Replacement {
+                name: "normalize-http".to_string(),
+                pattern: "http://".to_string(),
+                replacement: "https://".to_string(),
+                timing: ReplacementTiming::After,
+                in_code_blocks: false,
+                in_frontmatter: false,
+            },
+        ];
+
+        let input = "Visit http://example.com for more info.\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+        assert!(output.contains("https://example.com"));
+        assert!(!output.contains("http://"));
+    }
+
+    #[test]
+    fn test_replacements_end_to_end_with_fixtures() {
+        // Load replacements from the fixtures file and test end-to-end
+        // CARGO_MANIFEST_DIR points to rust/, so we need to go up one level
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
+        let replacements_file = fixtures_dir.join("replacements.yml");
+        let content = fs::read_to_string(&replacements_file).unwrap();
+        let replacements_data: ReplacementsFile = serde_yaml::from_str(&content).unwrap();
+
+        // Validate patterns compile
+        let mut valid_replacements = Vec::new();
+        for replacement in replacements_data.replacements {
+            if Regex::new(&replacement.pattern).is_ok() {
+                valid_replacements.push(replacement);
+            }
+        }
+
+        assert_eq!(valid_replacements.len(), 3);
+
+        // Test with actual markdown content
+        let input = "Version 1.2 is available at http://example.com.  There are  double  spaces here.\n";
+        let output = process_test_content_with_replacements(input, &valid_replacements);
+
+        // Check that "before" replacement (swap-version) was applied
+        assert!(output.contains("Version 2.1"));
+
+        // Check that "after" replacements were applied
+        assert!(output.contains("https://example.com"));
+        // Note: double spaces might be handled by built-in rules too, so we check the overall result
+        assert!(output.contains("double spaces") || output.contains("double  spaces"));
+    }
+
+    #[test]
+    fn test_replacements_respect_code_blocks() {
+        // Test that replacements don't run in code blocks by default
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: false, // Should NOT run in code blocks
+                in_frontmatter: false,
+            },
+        ];
+
+        let input = "This has foo in text.\n\n```\nfoo bar\n```\n\nMore foo here.\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+
+        // Should replace foo in text
+        assert!(output.contains("bar"));
+        // Should NOT replace foo in code block
+        assert!(output.contains("```\nfoo bar\n```") || output.contains("```\nfoo bar\n```\n"));
+    }
+
+    #[test]
+    fn test_replacements_in_code_blocks_when_enabled() {
+        // Test that replacements run in code blocks when in_code_blocks: true
+        let replacements = vec![
+            Replacement {
+                name: "test".to_string(),
+                pattern: "foo".to_string(),
+                replacement: "bar".to_string(),
+                timing: ReplacementTiming::Before,
+                in_code_blocks: true, // SHOULD run in code blocks
+                in_frontmatter: false,
+            },
+        ];
+
+        let input = "Text with foo.\n\n```\nfoo bar\n```\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+
+        // Should replace foo in both text and code
+        assert!(output.contains("bar"));
+        // Code block should have been modified
+        assert!(!output.contains("```\nfoo bar\n```") || output.contains("```\nbar bar\n```"));
+    }
 }

@@ -2,7 +2,7 @@
 name = "md-fixup"
 version = "0.1.28"
 edition = "2021"
-authors = ["Your Name <you@example.com>"]
+authors = ["Brett Terpstra <github@brettterpstra.com>"]
 description = "Markdown linter that normalizes formatting and wraps text"
 license = "MIT"
 

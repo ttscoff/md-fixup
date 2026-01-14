@@ -50,9 +50,11 @@ brew tap ttscoff/thelab
 brew install md-fixup
 ```
 
-### Python Version
+### Python Version (legacy)
 
 The Python version requires Python 3 and has no external dependencies (uses only standard library).
+
+**Note:** The Python implementation is frozen at version `0.1.28` and will not receive new features going forward. There is no longer full feature parity between the Python script and the Rust/binary version, and the rest of this README and all option/feature documentation describe the Rust version only. The Python script remains available for existing workflows that depend on it, but new projects should prefer the Rust binary.
 
 ```bash
 # Make the script executable
@@ -83,7 +85,7 @@ cp rust/target/release/md-fixup /usr/local/bin/md-fixup
 
 ## Usage
 
-Both versions have identical command-line interfaces:
+The Rust binary is the primary implementation, and the options and examples in this section describe the Rust version. The legacy Python script shares most of the same flags but may not support newer features added after `0.1.28`.
 
 ```bash
 # Process a file (outputs to stdout)

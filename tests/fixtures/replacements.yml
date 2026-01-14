@@ -1,0 +1,21 @@
+replacements:
+  - name: "fix-double-spaces"
+    pattern: "  +"
+    replacement: " "
+    timing: after
+    in_code_blocks: false
+    in_frontmatter: false
+
+  - name: "swap-version"
+    pattern: "(\\d+)\\.(\\d+)"
+    replacement: "$2.$1"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false
+
+  - name: "normalize-http"
+    pattern: "http://"
+    replacement: "https://"
+    timing: after
+    in_code_blocks: false
+    in_frontmatter: false

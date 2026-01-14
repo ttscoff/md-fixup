@@ -2182,7 +2182,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
         text_ref_to_url = {}  # Maps ref_id -> (url, title)
         # Track which text-based refs we've seen in the document (for ordering)
         text_ref_order = []  # List of ref_ids in document order
-        
+
         # Track numeric references for inline links only
         url_to_ref = {}  # Maps (url, title) -> ref_num
         next_ref = 1
@@ -2190,7 +2190,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
         # First pass: collect text-based reference IDs (including numeric ones)
         for link_item in link_data:
             line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
-            
+
             if link_type == 'reference':
                 # Preserve existing reference links - track their ID and URL
                 if ref_id and url:  # Only if we have both
@@ -2223,7 +2223,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
         # Second pass: assign numeric references to inline links (skipping used numbers)
         for link_item in link_data:
             line_idx, start, end, link_text, url, title, link_type, ref_id = link_item
-            
+
             if link_type == 'inline':
                 # Only inline links get numeric references
                 if url:  # Only if we have a URL
@@ -2282,7 +2282,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                 else:
                     # Skip links without valid data
                     continue
-                    
+
                 # Replace from right to left to maintain positions
                 new_line = new_line[:start] + replacement + new_line[end:]
 
@@ -2389,7 +2389,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
 
             if text_ref_to_url or url_to_ref:
                 lines.append('\n')
-                
+
             # Add text-based reference definitions first (in document order)
             for ref_id in text_ref_order:
                 url, title = text_ref_to_url[ref_id]

@@ -32,7 +32,7 @@ md-fixup performs 27 different normalization and formatting rules:
 22. Normalizes table formatting (aligns columns, handles relaxed and headerless tables)
 23. Normalizes emoji names (spellcheck and correct typos using fuzzy matching)
 24. Normalizes typography (curly quotes to straight, en/em dashes, ellipses, guillemets)
-25. Normalizes bold/italic markers (bold: always __, italic: always *)
+25. Normalizes bold/italic markers (bold: always __, italic: always *). Intra-word underscores (e.g., in filenames like `_my_file_name.md`) are preserved and not converted to emphasis markers.
 26. Normalizes list markers (renumber ordered lists, standardize bullet markers by level)
 27. Resets ordered lists to start at 1 (if disabled, preserves starting number)
 
@@ -139,7 +139,7 @@ Rules can be skipped using either their number or keyword:
 - `22` / `table-format` - Normalize table formatting
 - `23` / `emoji-spellcheck` - Normalize emoji names
 - `24` / `typography` - Normalize typography (sub-keywords: `em-dash`, `guillemet`)
-- `25` / `bold-italic` - Normalize bold/italic markers
+- `25` / `bold-italic` - Normalize bold/italic markers (preserves intra-word underscores in filenames like `_my_file_name.md`)
 - `26` / `list-markers` - Normalize list markers (renumber ordered lists, standardize bullet markers by level)
 - `27` / `list-reset` - Reset ordered lists to start at 1 (if disabled, preserves starting number)
 
@@ -248,7 +248,7 @@ Each replacement:
 You can override config and defaults on the command line:
 
 - `--replacements` / `--no-replacements` – force-enable or disable replacements
-- `--replacement-file FILE` – use a specific replacements YAML file for this run
+- `--replacements-file FILE` – use a specific replacements YAML file for this run
 
 ## Examples
 
@@ -266,7 +266,7 @@ md-fixup --skip typography,em-dash *.md
 find . -name "*.md" -not -path "./.git/*" | md-fixup --overwrite
 
 # Run with a specific replacements file
-md-fixup --replacement-file ./replacements.yml --overwrite file.md
+md-fixup --replacements-file ./replacements.yml --overwrite file.md
 ```
 
 ## License

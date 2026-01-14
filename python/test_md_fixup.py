@@ -222,6 +222,74 @@ class TestBoldItalicNormalization(unittest.TestCase):
         self.assertIn("__*bold italic*__", output)
         self.assertNotIn("***bold italic***", output)
 
+    def test_underscore_preservation_in_filenames(self):
+        """Test that underscores in filenames are preserved and not converted to emphasis"""
+        content = """Check out _my_file_name.md and _another_file.txt.
+
+Also see my_file_name.md and another_file.txt.
+
+_my_file_name.md starts with underscore.
+
+File _my_file_name.md ends with underscore.
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        # Filenames should be preserved (not converted to emphasis)
+        self.assertIn("_my_file_name.md", output)
+        self.assertIn("_another_file.txt", output)
+        self.assertIn("my_file_name.md", output)
+        self.assertIn("another_file.txt", output)
+
+    def test_underscore_emphasis_still_works(self):
+        """Test that normal emphasis with underscores still works at word boundaries"""
+        content = """This is _italic_ text and __bold__ text.
+
+_italic_ at start and __bold__ at start.
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        # Normal emphasis should be converted
+        self.assertIn("*italic*", output)
+        self.assertIn("__bold__", output)
+        self.assertNotIn("_italic_", output)
+
+    def test_mixed_underscore_cases(self):
+        """Test mixed cases with both emphasis and filenames"""
+        content = """_italic_ text and _my_file_name.md should both appear.
+
+__bold__ text and __my_file_name.md should both appear.
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        # Emphasis should be converted (may have spaces due to wrapping)
+        # Check that _italic_ was converted (should not appear in output)
+        self.assertNotIn("_italic_", output)
+        # Check that *italic* appears (may have spaces around it due to wrapping)
+        self.assertTrue("*italic*" in output or "* italic*" in output or "*italic* " in output,
+                       f"Expected *italic* pattern, got: {output}")
+        self.assertIn("__bold__", output)
+        # Filenames should be preserved
+        self.assertIn("_my_file_name.md", output)
+        self.assertIn("__my_file_name.md", output)
+
 
 class TestBasicFunctionality(unittest.TestCase):
     """Test basic functionality like line endings, whitespace, etc."""

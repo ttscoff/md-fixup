@@ -1342,12 +1342,29 @@ fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
                 // Keep original
                 new_result.push_str(full_match.as_str());
             } else {
-                // Check context using byte indices: not preceded by _ and not followed by _
+                // Check word boundaries: not preceded/followed by word characters (alphanumeric or _)
+                // Use byte-based checking for ASCII characters
+                let preceded_by_word_char = start > 0 && {
+                    let prev_byte = result_bytes[start - 1];
+                    (prev_byte >= b'a' && prev_byte <= b'z')
+                        || (prev_byte >= b'A' && prev_byte <= b'Z')
+                        || (prev_byte >= b'0' && prev_byte <= b'9')
+                        || prev_byte == b'_'
+                };
+                let followed_by_word_char = end < result_bytes.len() && {
+                    let next_byte = result_bytes[end];
+                    (next_byte >= b'a' && next_byte <= b'z')
+                        || (next_byte >= b'A' && next_byte <= b'Z')
+                        || (next_byte >= b'0' && next_byte <= b'9')
+                        || next_byte == b'_'
+                };
+
+                // Also check for adjacent underscores (part of larger pattern like ___)
                 let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
                 let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
-                if preceded_by_underscore || followed_by_underscore {
-                    // Keep original
+                if preceded_by_underscore || followed_by_underscore || preceded_by_word_char || followed_by_word_char {
+                    // Keep original (not at word boundary or part of larger pattern)
                     new_result.push_str(full_match.as_str());
                 } else {
                     // Replace __text__ with **text**
@@ -1501,12 +1518,29 @@ fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
                 // Keep original
                 new_result.push_str(full_match.as_str());
             } else {
-                // Check context using byte indices: not preceded by _ and not followed by _
+                // Check word boundaries: not preceded/followed by word characters (alphanumeric or _)
+                // Use byte-based checking for ASCII characters
+                let preceded_by_word_char = start > 0 && {
+                    let prev_byte = result_bytes[start - 1];
+                    (prev_byte >= b'a' && prev_byte <= b'z')
+                        || (prev_byte >= b'A' && prev_byte <= b'Z')
+                        || (prev_byte >= b'0' && prev_byte <= b'9')
+                        || prev_byte == b'_'
+                };
+                let followed_by_word_char = end < result_bytes.len() && {
+                    let next_byte = result_bytes[end];
+                    (next_byte >= b'a' && next_byte <= b'z')
+                        || (next_byte >= b'A' && next_byte <= b'Z')
+                        || (next_byte >= b'0' && next_byte <= b'9')
+                        || next_byte == b'_'
+                };
+
+                // Also check for adjacent underscores (part of larger pattern like __)
                 let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
                 let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
-                if preceded_by_underscore || followed_by_underscore {
-                    // Keep original
+                if preceded_by_underscore || followed_by_underscore || preceded_by_word_char || followed_by_word_char {
+                    // Keep original (not at word boundary or part of larger pattern)
                     new_result.push_str(full_match.as_str());
                 } else {
                     // Replace _text_ with *text*
@@ -3989,8 +4023,8 @@ fn main() {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("replacement-file")
-                .long("replacement-file")
+            Arg::new("replacements-file")
+                .long("replacements-file")
                 .value_name("FILE")
                 .help("Path to custom replacements YAML file")
         )
@@ -4207,7 +4241,7 @@ Examples:
     let reverse_emphasis = matches.get_flag("reverse-emphasis");
 
     // Handle replacements
-    let replacement_file_override = matches.get_one::<String>("replacement-file").map(|s| s.clone());
+    let replacement_file_override = matches.get_one::<String>("replacements-file").map(|s| s.clone());
     let replacements_enabled_cli = if matches.get_flag("no-replacements") {
         Some(false)
     } else if matches.get_flag("replacements") {
@@ -4486,6 +4520,49 @@ mod tests {
         let input = "***bold italic***\n";
         let output = process_test_content(input);
         assert!(output.contains("__*bold italic*__"));
+    }
+
+    #[test]
+    fn test_underscore_preservation_in_filenames() {
+        let input = "Check out _my_file_name.md and _another_file.txt.\n\nAlso see my_file_name.md and another_file.txt.\n\n_my_file_name.md starts with underscore.\n\nFile _my_file_name.md ends with underscore.\n";
+        let output = process_test_content(input);
+
+        // Filenames should be preserved (not converted to emphasis)
+        assert!(output.contains("_my_file_name.md"), "Filename with underscore should be preserved");
+        assert!(output.contains("_another_file.txt"), "Filename with underscore should be preserved");
+        assert!(output.contains("my_file_name.md"), "Filename without leading underscore should be preserved");
+        assert!(output.contains("another_file.txt"), "Filename without leading underscore should be preserved");
+    }
+
+    #[test]
+    fn test_underscore_emphasis_still_works() {
+        let input = "This is _italic_ text and __bold__ text.\n\n_italic_ at start and __bold__ at start.\n";
+        let output = process_test_content(input);
+
+        // Normal emphasis should be converted
+        assert!(output.contains("*italic*"), "Normal italic emphasis should be converted");
+        assert!(output.contains("__bold__"), "Normal bold emphasis should be preserved");
+        assert!(!output.contains("_italic_"), "Normal italic emphasis should not remain as underscore");
+    }
+
+    #[test]
+    fn test_mixed_underscore_cases() {
+        let input = "_italic_ text and _my_file_name.md should both appear.\n\n__bold__ text and __my_file_name.md should both appear.\n";
+        let output = process_test_content(input);
+
+        // Emphasis should be converted (may have spaces due to wrapping)
+        // Check that _italic_ was converted (should not appear in output)
+        assert!(!output.contains("_italic_"), "Emphasis should be converted, not remain as underscore");
+        // Check that *italic* appears (may have spaces around it due to wrapping)
+        assert!(
+            output.contains("*italic*") || output.contains("* italic*") || output.contains("*italic* "),
+            "Expected *italic* pattern, got: {}",
+            output
+        );
+        assert!(output.contains("__bold__"), "Bold emphasis should be preserved");
+        // Filenames should be preserved
+        assert!(output.contains("_my_file_name.md"), "Filename with single underscore should be preserved");
+        assert!(output.contains("__my_file_name.md"), "Filename with double underscore should be preserved");
     }
 
     #[test]

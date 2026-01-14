@@ -1343,9 +1343,17 @@ def normalize_bold_italic(line, reverse_emphasis=False):
 
         # Now handle standalone bold and italic
         # Bold with __ → **
+        # Only match if at word boundaries (preceded by space/punctuation/start, followed by space/punctuation/end)
         def replace_bold_rev(match):
             if is_protected(match.start()):
                 return match.group(0)
+            # Check word boundaries
+            start_pos = match.start()
+            end_pos = match.end()
+            preceded_by_word_char = start_pos > 0 and (result[start_pos - 1].isalnum() or result[start_pos - 1] == '_')
+            followed_by_word_char = end_pos < len(result) and (result[end_pos].isalnum() or result[end_pos] == '_')
+            if preceded_by_word_char or followed_by_word_char:
+                return match.group(0)  # Not at word boundary, leave alone
             return f'**{match.group(1)}**'
         result = re.sub(r'(?<!_)__([^_]+?)__(?!_)', replace_bold_rev, result)
 
@@ -1403,9 +1411,17 @@ def normalize_bold_italic(line, reverse_emphasis=False):
         result = re.sub(r'(?<!\*)\*\*(.+?)\*\*(?![*_])', replace_bold, result)
 
         # Italics with _ → *
+        # Only match if at word boundaries (preceded by space/punctuation/start, followed by space/punctuation/end)
         def replace_italic(match):
             if is_protected(match.start()):
                 return match.group(0)
+            # Check word boundaries
+            start_pos = match.start()
+            end_pos = match.end()
+            preceded_by_word_char = start_pos > 0 and (result[start_pos - 1].isalnum() or result[start_pos - 1] == '_')
+            followed_by_word_char = end_pos < len(result) and (result[end_pos].isalnum() or result[end_pos] == '_')
+            if preceded_by_word_char or followed_by_word_char:
+                return match.group(0)  # Not at word boundary, leave alone
             return f'*{match.group(1)}*'
         result = re.sub(r'(?<!_)_([^_]+?)_(?!_)', replace_italic, result)
 

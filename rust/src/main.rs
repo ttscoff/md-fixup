@@ -2510,8 +2510,8 @@ fn should_preserve_line(line: &str) -> bool {
                                   // Note: blank lines are NOT preserved here - they go through blank line compression
 }
 
-/// Tokenize text for wrapping, keeping markdown links as atomic units
-/// Code spans can break across lines, so they are not kept together
+/// Tokenize text for wrapping, keeping markdown links and code spans as atomic units
+/// Code spans must not be broken across lines to avoid line breaks appearing in output
 fn tokenize_for_wrap(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -2527,6 +2527,42 @@ fn tokenize_for_wrap(text: &str) -> Vec<String> {
         }
 
         let start = i;
+
+        // Check for code span: `code` or ``code`` (one or more backticks)
+        if chars[i] == '`' {
+            let mut backtick_count = 1;
+            i += 1;
+            // Count consecutive backticks
+            while i < chars.len() && chars[i] == '`' {
+                backtick_count += 1;
+                i += 1;
+            }
+            // Find closing backticks (same number)
+            let mut found_closing = false;
+            while i < chars.len() {
+                if chars[i] == '`' {
+                    let mut closing_count = 1;
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j] == '`' {
+                        closing_count += 1;
+                        j += 1;
+                    }
+                    if closing_count == backtick_count {
+                        i = j;
+                        found_closing = true;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            // If we found a closing, include the entire code span as one token
+            if found_closing {
+                tokens.push(chars[start..i].iter().collect());
+                continue;
+            }
+            // If no closing found, treat as regular text (malformed code span)
+            i = start;
+        }
 
         // Check for markdown link: [text](url) or [text][ref]
         if chars[i] == '[' {

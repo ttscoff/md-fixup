@@ -1814,6 +1814,84 @@ def should_preserve_line(line):
     # Note: blank lines are NOT preserved here - they go through blank line compression
     return False
 
+def tokenize_for_wrap(text):
+    """Tokenize text for wrapping, keeping markdown links and code spans as atomic units.
+    Code spans must not be broken across lines to avoid line breaks appearing in output.
+    """
+    tokens = []
+    i = 0
+    text_len = len(text)
+    
+    while i < text_len:
+        # Skip leading whitespace
+        while i < text_len and text[i].isspace():
+            i += 1
+        if i >= text_len:
+            break
+        
+        start = i
+        
+        # Check for code span: `code` or ``code`` (one or more backticks)
+        if text[i] == '`':
+            backtick_count = 1
+            i += 1
+            # Count consecutive backticks
+            while i < text_len and text[i] == '`':
+                backtick_count += 1
+                i += 1
+            # Find closing backticks (same number)
+            found_closing = False
+            while i < text_len:
+                if text[i] == '`':
+                    closing_count = 1
+                    j = i + 1
+                    while j < text_len and text[j] == '`':
+                        closing_count += 1
+                        j += 1
+                    if closing_count == backtick_count:
+                        i = j
+                        found_closing = True
+                        break
+                i += 1
+            # If we found a closing, include the entire code span as one token
+            if found_closing:
+                tokens.append(text[start:i])
+                continue
+            # If no closing found, treat as regular text (malformed code span)
+            i = start
+        
+        # Check for markdown link: [text](url) or [text][ref]
+        if text[i] == '[':
+            bracket_depth = 1
+            i += 1
+            # Find closing ]
+            while i < text_len and bracket_depth > 0:
+                if text[i] == '[':
+                    bracket_depth += 1
+                elif text[i] == ']':
+                    bracket_depth -= 1
+                i += 1
+            # Check if followed by ( or [
+            if i < text_len and (text[i] == '(' or text[i] == '['):
+                close_char = ')' if text[i] == '(' else ']'
+                i += 1
+                while i < text_len and text[i] != close_char:
+                    i += 1
+                if i < text_len:
+                    i += 1  # Include closing paren/bracket
+            # Include any trailing punctuation attached to the link
+            while i < text_len and not text[i].isspace():
+                i += 1
+            tokens.append(text[start:i])
+            continue
+        
+        # Regular word - read until whitespace
+        while i < text_len and not text[i].isspace():
+            i += 1
+        tokens.append(text[start:i])
+    
+    return tokens
+
 def wrap_text(text, width, prefix=''):
     """Wrap text at width, preserving links and code spans"""
     # Always include prefix in the first line
@@ -1827,7 +1905,7 @@ def wrap_text(text, width, prefix=''):
     if re.search(r'`[^`]{20,}`', text):
         return [full_first_line]
 
-    words = text.split()
+    words = tokenize_for_wrap(text)
     lines = []
     current_line = prefix
 

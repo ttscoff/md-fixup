@@ -2578,6 +2578,7 @@ fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
     let words = tokenize_for_wrap(text);
     let mut lines = Vec::new();
     let mut current_line = prefix.to_string();
+    let number_period_re = Regex::new(r"^\d+\.").unwrap();
 
     for word in words {
         let test_line = if current_line == prefix {
@@ -2589,10 +2590,45 @@ fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
         if test_line.chars().count() <= width {
             current_line = test_line;
         } else {
-            if current_line != prefix {
-                lines.push(current_line.clone());
+            // Check if this word starts with a number and period (e.g., "3.")
+            // If so, we should also wrap the previous word to avoid creating a false list item
+            if number_period_re.is_match(&word) && current_line != prefix {
+                // Extract the last word from current_line (after prefix)
+                let current_content = &current_line[prefix.len()..];
+                if !current_content.trim().is_empty() {
+                    // Find the last space in current_content
+                    if let Some(last_space_pos) = current_content.rfind(' ') {
+                        let last_word = current_content[last_space_pos + 1..].trim();
+                        let current_line_without_last = if last_space_pos == 0 {
+                            prefix.to_string()
+                        } else {
+                            format!("{}{}", prefix, current_content[..last_space_pos].trim_end())
+                        };
+                        // Start new line with both the previous word and the number+period word
+                        if current_line_without_last != prefix {
+                            lines.push(current_line_without_last);
+                        }
+                        current_line = format!("{}{} {}", prefix, last_word, word);
+                    } else {
+                        // Only one word in current_line, move it to new line with the number+period word
+                        let last_word = current_content.trim();
+                        if current_line != prefix {
+                            lines.push(prefix.to_string());
+                        }
+                        current_line = format!("{}{} {}", prefix, last_word, word);
+                    }
+                } else {
+                    if current_line != prefix {
+                        lines.push(current_line.clone());
+                    }
+                    current_line = format!("{}{}", prefix, word);
+                }
+            } else {
+                if current_line != prefix {
+                    lines.push(current_line.clone());
+                }
+                current_line = format!("{}{}", prefix, word);
             }
-            current_line = format!("{}{}", prefix, word);
         }
     }
 

@@ -1831,15 +1831,42 @@ def wrap_text(text, width, prefix=''):
     lines = []
     current_line = prefix
 
-    for word in words:
+    for i, word in enumerate(words):
         # Check if adding this word would exceed width
         test_line = current_line + (' ' if current_line != prefix else '') + word
         if len(test_line) <= width:
             current_line = test_line
         else:
-            if current_line != prefix:
-                lines.append(current_line)
-            current_line = prefix + word
+            # Check if this word starts with a number and period (e.g., "3.")
+            # If so, we should also wrap the previous word to avoid creating a false list item
+            if re.match(r'^\d+\.', word) and current_line != prefix:
+                # Extract the last word from current_line (after prefix)
+                current_content = current_line[len(prefix):].strip()
+                if current_content:
+                    # Split to get the last word
+                    current_words = current_content.split()
+                    if len(current_words) > 0:
+                        last_word = current_words[-1]
+                        # Remove last word from current_line
+                        current_line_without_last = current_line.rsplit(' ' + last_word, 1)[0]
+                        if current_line_without_last == prefix:
+                            current_line_without_last = prefix
+                        # Start new line with both the previous word and the number+period word
+                        if current_line_without_last != prefix:
+                            lines.append(current_line_without_last)
+                        current_line = prefix + last_word + ' ' + word
+                    else:
+                        if current_line != prefix:
+                            lines.append(current_line)
+                        current_line = prefix + word
+                else:
+                    if current_line != prefix:
+                        lines.append(current_line)
+                    current_line = prefix + word
+            else:
+                if current_line != prefix:
+                    lines.append(current_line)
+                current_line = prefix + word
 
     if current_line != prefix:
         lines.append(current_line)

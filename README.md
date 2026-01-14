@@ -194,6 +194,60 @@ rules:
 - The `skip: all` pattern starts with all rules disabled, then includes only the specified rules
 - Group keywords (`code-block-newlines`, `display-math-newlines`) work in config files
 
+### Custom regex replacements
+
+md-fixup can also run user-defined regex search/replace patterns as part of a fixup pass. Patterns are defined in a YAML file and can be scoped to run before or after the built-in rules, and optionally inside code blocks or YAML frontmatter.
+
+Replacements are enabled by default if a replacements file exists in one of these locations (in order of precedence):
+
+- `.md-fixup-replacements` in the current directory
+- The path set in `replacements_file:` in the config file
+- `~/.config/md-fixup/replacements.yml` (or `$XDG_CONFIG_HOME/md-fixup/replacements.yml`)
+
+You can control replacements via the config file:
+
+```yaml
+width: 80
+overwrite: true
+replacements: true                 # enable/disable replacements (default: true if a file exists)
+replacements_file: ~/my-replacements.yml
+rules:
+  skip:
+    - wrap
+```
+
+The replacements file itself is also YAML, with this structure:
+
+```yaml
+replacements:
+  - name: "fix-double-spaces"
+    pattern: "  +"
+    replacement: " "
+    # Optional fields (defaults shown):
+    timing: after          # "before" or "after" built-in rules
+    in_code_blocks: false
+    in_frontmatter: false
+
+  - name: "swap-version"
+    pattern: '(\\d+)\\.(\\d+)'
+    replacement: '$2.$1'
+    timing: before
+```
+
+Each replacement:
+
+- **name**: Human-readable identifier for logging and debugging
+- **pattern**: A Rust `regex` pattern (supports capture groups)
+- **replacement**: The replacement string (supports `$1`, `$2`, etc. for capture groups)
+- **timing**: When to run the replacement (`before` or `after` the built-in rules)
+- **in_code_blocks**: If `true`, pattern is allowed to run inside fenced code blocks
+- **in_frontmatter**: If `true`, pattern is allowed to run inside YAML frontmatter
+
+You can override config and defaults on the command line:
+
+- `--replacements` / `--no-replacements` – force-enable or disable replacements
+- `--replacement-file FILE` – use a specific replacements YAML file for this run
+
 ## Examples
 
 ```bash
@@ -208,6 +262,9 @@ md-fixup --skip typography,em-dash *.md
 
 # Process all markdown files in a project
 find . -name "*.md" -not -path "./.git/*" | md-fixup --overwrite
+
+# Run with a specific replacements file
+md-fixup --replacement-file ./replacements.yml --overwrite file.md
 ```
 
 ## License

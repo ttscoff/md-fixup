@@ -2883,7 +2883,7 @@ fn load_replacements(config: &Option<Config>, custom_file: &Option<String>) -> O
     let replacements_file = replacements_file?;
     let content = fs::read_to_string(&replacements_file).ok()?;
     let replacements_data: ReplacementsFile = serde_yaml::from_str(&content).ok()?;
-    
+
     // Validate and compile regex patterns
     let mut valid_replacements = Vec::new();
     for replacement in replacements_data.replacements {
@@ -2894,7 +2894,7 @@ fn load_replacements(config: &Option<Config>, custom_file: &Option<String>) -> O
             eprintln!("Warning: Invalid regex pattern in replacement '{}', skipping", replacement.name);
         }
     }
-    
+
     Some(valid_replacements)
 }
 

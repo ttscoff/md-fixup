@@ -3015,6 +3015,10 @@ fn apply_replacements(
     let mut changes_made = false;
 
     for replacement in replacements {
+        // Multi-line patterns are handled via document-level replacement pass
+        if is_multiline_replacement_pattern(&replacement.pattern) {
+            continue;
+        }
         // Check timing match
         if replacement.timing != timing {
             continue;
@@ -3039,6 +3043,161 @@ fn apply_replacements(
     }
 
     (result, changes_made)
+}
+
+fn is_multiline_replacement_pattern(pattern: &str) -> bool {
+    // Heuristic: patterns that can span multiple lines or explicitly opt into multiline/dotall.
+    // These cannot work in line-by-line replacement mode.
+    pattern.contains("\\n")
+        || pattern.contains("[\\s\\S]")
+        || pattern.contains("(?s")
+        || pattern.contains("(?m")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReplacementRegionKind {
+    Normal,
+    CodeBlock,
+    Frontmatter,
+}
+
+fn compute_replacement_regions(text: &str) -> Vec<(usize, usize, ReplacementRegionKind)> {
+    // Build regions using the same state transitions as process_file does for
+    // frontmatter and fenced code blocks at the point replacements are applied.
+    //
+    // Important subtlety: the opening code fence line is treated as Normal (not in_code_block yet),
+    // because process_file toggles in_code_block AFTER applying replacements for that line.
+    let mut regions: Vec<(usize, usize, ReplacementRegionKind)> = Vec::new();
+
+    let mut in_code_block = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_started = false;
+
+    let mut offset: usize = 0;
+
+    for line in text.split_inclusive('\n') {
+        let start = offset;
+        let end = offset + line.len();
+        offset = end;
+
+        let trimmed = line.trim_end_matches('\n').trim();
+
+        // Frontmatter start (only if it's the first line)
+        if start == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            frontmatter_started = true;
+        }
+
+        // Determine region kind for this line BEFORE updating code/frontmatter state
+        let kind = if in_frontmatter {
+            ReplacementRegionKind::Frontmatter
+        } else if in_code_block {
+            ReplacementRegionKind::CodeBlock
+        } else {
+            ReplacementRegionKind::Normal
+        };
+
+        regions.push((start, end, kind));
+
+        // Frontmatter end fence (--- or ...), but not the opening fence
+        if in_frontmatter && frontmatter_started && start > 0 && (trimmed == "---" || trimmed == "...") {
+            in_frontmatter = false;
+        }
+
+        // Code fence toggles code block state (opening fence toggles after this line)
+        let fence_line = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        if fence_line {
+            in_code_block = !in_code_block;
+        }
+    }
+
+    // If the file doesn't end with a newline, split_inclusive won't return the last line.
+    // Add a final region for any remaining trailing content.
+    if offset < text.len() {
+        regions.push((offset, text.len(), ReplacementRegionKind::Normal));
+    }
+
+    // Merge adjacent regions of the same kind to reduce allocations
+    let mut merged: Vec<(usize, usize, ReplacementRegionKind)> = Vec::new();
+    for (start, end, kind) in regions {
+        if let Some(last) = merged.last_mut() {
+            if last.2 == kind && last.1 == start {
+                last.1 = end;
+                continue;
+            }
+        }
+        merged.push((start, end, kind));
+    }
+
+    merged
+}
+
+fn apply_replacements_document(
+    text: &str,
+    replacements: &[Replacement],
+    timing: ReplacementTiming,
+) -> (String, bool) {
+    let mut result = text.to_string();
+    let mut changes_made = false;
+
+    for replacement in replacements {
+        if replacement.timing != timing {
+            continue;
+        }
+        if !is_multiline_replacement_pattern(&replacement.pattern) {
+            continue;
+        }
+
+        let regex = match Regex::new(&replacement.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let regions = compute_replacement_regions(&result);
+        let mut new_result = String::with_capacity(result.len());
+        let mut local_changed = false;
+
+        for (start, end, kind) in regions {
+            let segment = &result[start..end];
+            let allowed = match kind {
+                ReplacementRegionKind::CodeBlock => replacement.in_code_blocks,
+                ReplacementRegionKind::Frontmatter => replacement.in_frontmatter,
+                ReplacementRegionKind::Normal => true,
+            };
+
+            if allowed {
+                let replaced = regex.replace_all(segment, &replacement.replacement);
+                if replaced != segment {
+                    local_changed = true;
+                }
+                new_result.push_str(&replaced);
+            } else {
+                new_result.push_str(segment);
+            }
+        }
+
+        if local_changed {
+            result = new_result;
+            changes_made = true;
+        }
+    }
+
+    (result, changes_made)
+}
+
+fn split_lines_preserve_newlines(s: &str) -> Vec<String> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let mut parts: Vec<String> = s.split_inclusive('\n').map(|l| l.to_string()).collect();
+    if !s.ends_with('\n') {
+        if let Some(last_nl) = s.rfind('\n') {
+            parts.push(s[last_nl + 1..].to_string());
+        } else {
+            parts.push(s.to_string());
+        }
+    }
+    parts
 }
 
 fn parse_config_rules(config: &Config) -> HashSet<u8> {
@@ -3131,8 +3290,33 @@ fn process_file(
     reverse_emphasis: bool,
     replacements: &[Replacement],
 ) -> Result<bool, String> {
-    let content =
+    let mut content =
         fs::read_to_string(filepath).map_err(|e| format!("Error reading {}: {}", filepath, e))?;
+
+    let mut changes_made = false;
+
+    // Normalize line endings early so multi-line replacements can reliably match
+    if !skip_rules.contains(&1) {
+        let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+        if normalized != content {
+            content = normalized;
+            changes_made = true;
+        }
+        if !content.ends_with('\n') {
+            content.push('\n');
+            changes_made = true;
+        }
+    }
+
+    // Apply document-level "before" replacements for multi-line patterns
+    if !replacements.is_empty() {
+        let (new_content, changed) =
+            apply_replacements_document(&content, replacements, ReplacementTiming::Before);
+        if changed {
+            content = new_content;
+            changes_made = true;
+        }
+    }
 
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
     let mut output: Vec<String> = Vec::new();
@@ -3141,7 +3325,6 @@ fn process_file(
     let mut in_frontmatter = false;
     let mut frontmatter_started = false;
     let mut i = 0;
-    let mut changes_made = false;
     let mut consecutive_blank_lines = 0;
     let mut current_list_indent_unit: Option<usize> = None;
     let mut list_context_stack: Vec<ListContext> = Vec::new();
@@ -3891,6 +4074,17 @@ fn process_file(
     if use_inline || use_reference {
         convert_links_in_document(&mut output, use_inline, use_reference, place_at_beginning);
         changes_made = true;
+    }
+
+    // Apply document-level "after" replacements for multi-line patterns
+    if !replacements.is_empty() {
+        let output_str = output.join("");
+        let (new_output_str, changed) =
+            apply_replacements_document(&output_str, replacements, ReplacementTiming::After);
+        if changed {
+            output = split_lines_preserve_newlines(&new_output_str);
+            changes_made = true;
+        }
     }
 
     // Ensure exactly one blank line at end of file
@@ -5016,6 +5210,63 @@ mod tests {
         assert_eq!(replacements_data.replacements[0].name, "fix-double-spaces");
         assert_eq!(replacements_data.replacements[1].name, "swap-version");
         assert_eq!(replacements_data.replacements[2].name, "normalize-http");
+    }
+
+    #[test]
+    fn test_young_replacements_fixture_applies() {
+        // Validate that multi-line replacements can be loaded and applied.
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
+        let replacements_file = fixtures_dir.join("young-replacements.yml");
+        let markdown_file = fixtures_dir.join("young-markdown.md");
+
+        assert!(
+            replacements_file.exists(),
+            "Young replacements fixture file should exist at {:?}",
+            replacements_file
+        );
+        assert!(
+            markdown_file.exists(),
+            "Young markdown fixture file should exist at {:?}",
+            markdown_file
+        );
+
+        let repl_content = fs::read_to_string(&replacements_file).unwrap();
+        let replacements_data: ReplacementsFile = serde_yaml::from_str(&repl_content).unwrap();
+        assert!(
+            !replacements_data.replacements.is_empty(),
+            "Expected replacements in young-replacements.yml"
+        );
+
+        let md_content = fs::read_to_string(&markdown_file).unwrap();
+        let output = process_test_content_with_replacements(&md_content, &replacements_data.replacements);
+
+        // Subheads replacement should turn [b]...[/b] into a heading
+        assert!(output.contains("## Testing"), "Expected heading conversion, got: {}", output);
+        assert!(!output.contains("[b]"), "BBCode [b] should be removed");
+        assert!(!output.contains("[/b]"), "BBCode [/b] should be removed");
+
+        // Table tags should be removed if the table rule matches
+        assert!(!output.contains("[table]"), "BBCode [table] should be removed");
+        assert!(!output.contains("[/table]"), "BBCode [/table] should be removed");
+    }
+
+    #[test]
+    fn test_young_replacements_multiline_quote() {
+        // Quote is explicitly multi-line; verify tags are removed across newlines.
+        let replacements = vec![Replacement {
+            name: "quote".to_string(),
+            pattern: r"(?s)\[quote\]\n(.*?)\[/quote\]".to_string(),
+            replacement: "> $1".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
+
+        let input = "[quote]\nFirst line\nSecond line\n[/quote]\n";
+        let output = process_test_content_with_replacements(input, &replacements);
+        assert!(!output.contains("[quote]"));
+        assert!(!output.contains("[/quote]"));
+        assert!(output.contains("> First line"), "Expected quote conversion, got: {}", output);
     }
 
     #[test]

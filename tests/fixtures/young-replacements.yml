@@ -1,0 +1,35 @@
+replacements:
+  - name: "MTN_Captions"
+    pattern: '\[center\]\[i\](.*?)\[/i\](.*?)\[/center\]'
+    replacement: "*$1*$2"
+    timing: before
+  - name: "MTN_Quotes"
+    pattern: '(?s)\[quote\]\n(.*?)\[/quote\]'
+    replacement: "> $1"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false
+  - name: "MTN_Code"
+    pattern: '(?s)\[code\](.*?)\[/code\]'
+    replacement: "```$1```"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false
+  - name: "MTN_Subheads"
+    pattern: '(?m)^\[b\](.*?)\[/b\]'
+    replacement: "## $1\n"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false
+  - name: "MTN_Tables"
+    pattern: '(?ms)^\[table\]\n(.*)\n(.*?)\[/table\]'
+    replacement: "$1\n:-- | :-- | :-- \n$2\n"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false
+  - name: "MTN_URLs"
+    pattern: '\[url=(.*?)\](.*?)\[/url\]'
+    replacement: "[$2]($1)"
+    timing: before
+    in_code_blocks: false
+    in_frontmatter: false

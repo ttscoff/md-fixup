@@ -245,6 +245,28 @@ Each replacement:
 - **in_code_blocks**: If `true`, pattern is allowed to run inside fenced code blocks
 - **in_frontmatter**: If `true`, pattern is allowed to run inside YAML frontmatter
 
+**YAML quoting and escaping tips:**
+- Prefer **single quotes** for `pattern:` when your regex includes backslashes (common with `\[` `\]` `\d` `\s`, etc.). Single-quoted YAML strings do not treat backslashes as escapes, so the regex reaches the engine unchanged.
+- If you use **double quotes** for `pattern:`, you often need to **double-escape backslashes** (e.g. write `\\d+` instead of `\d+`) because YAML will interpret backslashes inside double-quoted strings.
+- In **double-quoted YAML strings**, some sequences like `\|` are not valid YAML escapes and can cause parse errors. Either remove the backslash (often you do not need it) or use single quotes.
+
+Example (BBCode-style tags, multi-line, and anchors):
+
+```yaml
+replacements:
+  - name: "subhead"
+    pattern: '(?m)^\[b\](.*?)\[/b\]'
+    replacement: '## $1'
+    timing: before
+
+  - name: "quote"
+    pattern: '(?s)\[quote\]\n(.*?)\[/quote\]'
+    replacement: '> $1'
+    timing: before
+```
+
+Multi-line patterns are supported. If your `pattern` includes `\n` or uses inline flags like `(?s)`/`(?m)`, it will be applied to the whole document (still respecting `in_code_blocks` and `in_frontmatter`). If you use `^`/`$` and want them to match line starts/ends within the document, include `(?m)` in the pattern.
+
 You can override config and defaults on the command line:
 
 - `--replacements` / `--no-replacements` – force-enable or disable replacements

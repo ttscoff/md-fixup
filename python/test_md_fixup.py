@@ -290,6 +290,36 @@ __bold__ text and __my_file_name.md should both appear.
         self.assertIn("_my_file_name.md", output)
         self.assertIn("__my_file_name.md", output)
 
+    def test_emphasis_at_line_start_not_list_item(self):
+        """Test that emphasis at start of paragraph is not treated as a list item"""
+        content = """*This is a full-line phrase with an emphasis by surrounding asterisks.*
+
+*This is an emphasis* by asterisks at the beginning of a paragraph.
+
+_This is a full-line phrase with an emphasis by surrounding underscores._
+
+_This is an emphasis_ by underscores at the beginning of a paragraph.
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            # Use wide wrap width to avoid wrapping affecting assertions
+            md_fixup.process_file(f.name, 120, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        # Should not have been rewritten into list items ("* " prefix)
+        self.assertNotIn("* This is", output)
+
+        # Asterisk emphasis should remain asterisk emphasis at line start
+        self.assertIn("*This is a full-line phrase with an emphasis by surrounding asterisks.*", output)
+        self.assertIn("*This is an emphasis* by asterisks at the beginning of a paragraph.", output)
+
+        # Underscore emphasis will normalize to asterisks, but should still NOT become list items
+        self.assertIn("*This is a full-line phrase with an emphasis by surrounding underscores.*", output)
+        self.assertIn("*This is an emphasis* by underscores at the beginning of a paragraph.", output)
+
 
 class TestBasicFunctionality(unittest.TestCase):
     """Test basic functionality like line endings, whitespace, etc."""
@@ -375,6 +405,33 @@ class TestComplexScenarios(unittest.TestCase):
         # Check nested items (spaces converted to tabs)
         self.assertIn("1. Testing something", output)
         self.assertIn("2. Else", output)
+
+
+class TestWrapAfterLinkConversion(unittest.TestCase):
+    """Ensure wrapping happens after link conversion (inline -> reference)."""
+
+    def test_wrap_happens_after_reference_link_conversion(self):
+        # The inline URL is intentionally very long; after converting to reference-style,
+        # the sentence should fit on one line at this width.
+        content = (
+            "This is a [link](https://example.com/this/is/a/very/long/path/that/would/force/wrapping) in text.\n"
+        )
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            # Rule 30 (inline-links) is disabled by default in the CLI; mirror that here.
+            md_fixup.process_file(f.name, 40, overwrite=True, skip_rules={30})
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        # Should have converted to reference-style
+        self.assertIn("This is a [link][1] in text.", output)
+        self.assertIn("[1]: https://example.com/this/is/a/very/long/path/that/would/force/wrapping", output)
+
+        # The original inline link should be gone
+        self.assertNotIn("](https://example.com/this/is/a/very/long/path/that/would/force/wrapping)", output)
 
 
 if __name__ == '__main__':

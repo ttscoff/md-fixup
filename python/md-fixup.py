@@ -933,10 +933,10 @@ def is_code_block(line):
     return stripped.startswith('```') or stripped.startswith('~~~')
 
 def is_list_item(line):
-    """Check if line is a list item (with or without space after marker)"""
+    """Check if line is a list item (requires whitespace after marker)"""
     stripped = line.lstrip()
-    # Match list markers with space, or without space followed by non-whitespace
-    return bool(re.match(r"^[-*+]\s+|^[-*+][^\s]|^\d+\.\s+", stripped))
+    # Require whitespace after marker so emphasis like "*This" isn't mistaken for a list item
+    return bool(re.match(r"^[-*+]\s+|^\d+\.\s+", stripped))
 
 def is_headline(line):
     """Check if line is a headline (header)"""
@@ -1661,7 +1661,8 @@ def spaces_to_tabs_for_list(line, indent_unit):
     line_no_nl = line.rstrip('\n')
 
     # Match list items with or without space after marker
-    match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line_no_nl)
+    # Require at least one whitespace after list marker to avoid matching emphasis like "*This"
+    match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line_no_nl)
     if match:
         indent = match.group(1)
         marker = match.group(2)
@@ -1722,7 +1723,8 @@ def normalize_list_markers(line, list_context_stack, indent_unit=2, skip_list_re
     if not is_list_item(line):
         return line, list_context_stack, False
 
-    match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+    # Require at least one whitespace after list marker to avoid matching emphasis like "*This"
+    match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line)
     if not match:
         return line, list_context_stack, False
 
@@ -1827,6 +1829,10 @@ def should_preserve_line(line):
     # Horizontal rules
     if is_horizontal_rule(line):
         return True
+    # Reference-style link definitions should never be wrapped
+    # e.g. [1]: https://example.com "Title"
+    if re.match(r'^\[[^\]]+\]\s*:\s*\S+', stripped):
+        return True
     # Note: blank lines are NOT preserved here - they go through blank line compression
     return False
 
@@ -1837,16 +1843,16 @@ def tokenize_for_wrap(text):
     tokens = []
     i = 0
     text_len = len(text)
-    
+
     while i < text_len:
         # Skip leading whitespace
         while i < text_len and text[i].isspace():
             i += 1
         if i >= text_len:
             break
-        
+
         start = i
-        
+
         # Check for code span: `code` or ``code`` (one or more backticks)
         if text[i] == '`':
             backtick_count = 1
@@ -1875,7 +1881,7 @@ def tokenize_for_wrap(text):
                 continue
             # If no closing found, treat as regular text (malformed code span)
             i = start
-        
+
         # Check for markdown link: [text](url) or [text][ref]
         if text[i] == '[':
             bracket_depth = 1
@@ -1900,12 +1906,12 @@ def tokenize_for_wrap(text):
                 i += 1
             tokens.append(text[start:i])
             continue
-        
+
         # Regular word - read until whitespace
         while i < text_len and not text[i].isspace():
             i += 1
         tokens.append(text[start:i])
-    
+
     return tokens
 
 def wrap_text(text, width, prefix=''):
@@ -2411,7 +2417,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
             # This ensures we don't break list structure during link conversion
             if is_list_item(line):
                 # Extract the list item structure from the original line
-                orig_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+                orig_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line)
                 if orig_match:
                     orig_indent = orig_match.group(1)
                     orig_marker = orig_match.group(2)
@@ -2419,7 +2425,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                     orig_content = orig_match.group(4)
 
                     # Check if the new line is still a valid list item
-                    new_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', new_line)
+                    new_match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', new_line)
                     if not new_match:
                         # The replacement completely broke the list structure - reconstruct it
                         # The new_line should have the same content but with links replaced
@@ -2555,6 +2561,37 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
     except Exception as e:
         print(f"Error reading {filepath}: {e}", file=sys.stderr)
         return False
+
+    # Process link conversions (rules 28, 29, 30) BEFORE wrapping.
+    # Converting inline -> reference links can drastically shorten lines; wrapping first can produce
+    # unnecessarily short lines.
+    if skip_rules is None:
+        skip_rules = set()
+
+    # Use a copy so link-rule bookkeeping doesn't affect the main pass
+    link_skip_rules = set(skip_rules)
+
+    # Rule 30 (inline-links) is disabled by default and overrides rule 28 if enabled
+    # Rule 28 (reference-links) is enabled by default
+    # Rule 29 (links-at-end) is enabled by default - puts links at end
+    use_inline = 30 not in link_skip_rules
+    if use_inline:
+        link_skip_rules.add(28)
+        link_skip_rules.add(29)
+
+    # If links-at-end is included, reference-links is included by default
+    if 29 not in link_skip_rules:
+        link_skip_rules.discard(28)
+
+    use_reference = 28 not in link_skip_rules and not use_inline
+    place_at_beginning = (29 in link_skip_rules) and use_reference
+
+    if use_inline or use_reference:
+        new_lines = convert_links_in_document(lines, use_inline, use_reference, place_at_beginning)
+        if new_lines != lines:
+            lines = new_lines
+        # Even if conversion results in the same output, we don't want to force a rewrite.
+        # `changes_made` will be updated naturally by later passes if needed.
 
     output = []
     in_code_block = False
@@ -2857,7 +2894,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
             # Check for CommonMark interrupted list: bullet <-> numbered at same level
             # Do this BEFORE normalization so we can detect the original marker types
             list_indent_before = get_list_indent(line)
-            match_current_orig = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+            match_current_orig = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line)
             interruption_detected = False
             if match_current_orig and output:
                 current_marker_orig = match_current_orig.group(2)
@@ -2872,7 +2909,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
 
                 if prev_line and is_list_item(prev_line):
                     prev_indent = get_list_indent(prev_line)
-                    match_prev = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', prev_line)
+                    match_prev = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', prev_line)
                     if match_prev:
                         prev_marker = match_prev.group(2)
                         prev_is_numbered = bool(re.match(r'^\d+\.', prev_marker))
@@ -2950,7 +2987,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
             # Process list item content
             # Match with or without space after marker
             # Note: line should always match since we're inside the is_list_item block
-            match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+            match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line)
             if not match:
                 # Line should match - if it doesn't, something went wrong in processing
                 # Try to recover by checking if it's still a list item
@@ -2974,7 +3011,7 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                         if not line.endswith('\n') and original_line.endswith('\n'):
                             line += '\n'
                         # Try the match again
-                        match = re.match(r'^(\s*)([-*+]|\d+\.)(\s*)(.*)$', line)
+                        match = re.match(r'^(\s*)([-*+]|\d+\.)(\s+)(.*)$', line)
                         if not match:
                             # Still doesn't match - append as-is to avoid data loss
                             output.append(line)
@@ -3137,34 +3174,6 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                 consecutive_blank_lines = 0
 
         i += 1
-
-    # Process link conversions (rules 28, 29, 30)
-    # Rule 30 (inline-links) is disabled by default and overrides rule 28 if enabled
-    # Rule 28 (reference-links) is enabled by default
-    # Rule 29 (links-at-end) is enabled by default - puts links at end
-    # If rule 29 is skipped AND rule 28 is enabled, put links at beginning
-    # If rule 29 is included, rule 28 is included by default
-    # If rule 30 is included, both rule 28 and 29 are skipped
-    if skip_rules is None:
-        skip_rules = set()
-
-    # If inline-links is enabled, skip reference-links and links-at-end
-    use_inline = 30 not in skip_rules
-    if use_inline:
-        skip_rules.add(28)
-        skip_rules.add(29)
-
-    # If links-at-end is included, reference-links is included by default
-    if 29 not in skip_rules:
-        skip_rules.discard(28)  # Enable reference-links if links-at-end is enabled
-
-    use_reference = 28 not in skip_rules and not use_inline
-    # place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
-    place_at_beginning = (29 in skip_rules) and use_reference
-
-    if use_inline or use_reference:
-        output = convert_links_in_document(output, use_inline, use_reference, place_at_beginning)
-        changes_made = True
 
     # Ensure exactly one blank line at end of file
     if 15 not in skip_rules:

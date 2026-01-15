@@ -895,7 +895,8 @@ fn is_code_block(line: &str) -> bool {
 
 fn is_list_item(line: &str) -> bool {
     let stripped = line.trim_start();
-    Regex::new(r"^[-*+]\s+|^[-*+][^\s]|^\d+\.\s+")
+    // Require whitespace after the marker so emphasis like "*This" isn't mistaken for a list item
+    Regex::new(r"^[-*+]\s+|^\d+\.\s+")
         .unwrap()
         .is_match(stripped)
 }
@@ -2537,7 +2538,15 @@ fn get_blockquote_prefix(line: &str) -> String {
 
 fn should_preserve_line(line: &str) -> bool {
     let stripped = line.trim();
+    // Reference-style link definitions should never be wrapped
+    // e.g. [1]: https://example.com "Title"
+    let is_ref_def = stripped.starts_with('[')
+        && stripped
+            .find(']')
+            .and_then(|idx| stripped.as_bytes().get(idx + 1).copied())
+            == Some(b':');
     is_code_block(line)
+        || is_ref_def
         || stripped.starts_with('#')
         || is_horizontal_rule(line)
         || stripped.contains('|') // Tables should not be wrapped
@@ -3318,7 +3327,37 @@ fn process_file(
         }
     }
 
-    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    // Preserve newlines so downstream logic (including link conversion) can operate consistently.
+    let mut lines: Vec<String> = split_lines_preserve_newlines(&content);
+
+    // Process link conversions (rules 28, 29, 30) BEFORE wrapping.
+    // Converting inline -> reference links can drastically shorten lines; wrapping first can produce
+    // unnecessarily short lines.
+    let use_inline = !skip_rules.contains(&30);
+    let mut link_skip_rules = skip_rules.clone();
+    if use_inline {
+        // If inline-links is enabled, skip reference-links and links-at-end
+        link_skip_rules.insert(28);
+        link_skip_rules.insert(29);
+    }
+
+    // If links-at-end is included, reference-links is included by default
+    if !link_skip_rules.contains(&29) {
+        link_skip_rules.remove(&28); // Enable reference-links if links-at-end is enabled
+    }
+
+    let use_reference = !link_skip_rules.contains(&28) && !use_inline;
+    // place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
+    let place_at_beginning = link_skip_rules.contains(&29) && use_reference;
+
+    if use_inline || use_reference {
+        let before = lines.clone();
+        convert_links_in_document(&mut lines, use_inline, use_reference, place_at_beginning);
+        if lines != before {
+            changes_made = true;
+        }
+    }
+
     let mut output: Vec<String> = Vec::new();
     let mut in_code_block = false;
     let mut in_math_block = false;
@@ -3336,7 +3375,8 @@ fn process_file(
         frontmatter_started = true;
     }
 
-    let list_item_re_main = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s*)(.*)$").unwrap();
+    // Require at least one whitespace after list marker to avoid matching emphasis like "*This"
+    let list_item_re_main = Regex::new(r"^(\s*)([-*+]|\d+\.)(\s+)(.*)$").unwrap();
     let numbered_marker_re = Regex::new(r"^\d+\.$").unwrap();
     while i < lines.len() {
         let mut line = lines[i].clone();
@@ -4045,35 +4085,6 @@ fn process_file(
         }
 
         i += 1;
-    }
-
-    // Process link conversions (rules 28, 29, 30)
-    // Rule 30 (inline-links) is disabled by default and overrides rule 28 if enabled
-    // Rule 28 (reference-links) is enabled by default
-    // Rule 29 (links-at-end) is enabled by default - puts links at end
-    // If rule 29 is skipped AND rule 28 is enabled, put links at beginning
-    // If rule 29 is included, rule 28 is included by default
-    // If rule 30 is included, both rule 28 and 29 are skipped
-    let use_inline = !skip_rules.contains(&30);
-    let mut link_skip_rules = skip_rules.clone();
-    if use_inline {
-        // If inline-links is enabled, skip reference-links and links-at-end
-        link_skip_rules.insert(28);
-        link_skip_rules.insert(29);
-    }
-
-    // If links-at-end is included, reference-links is included by default
-    if !link_skip_rules.contains(&29) {
-        link_skip_rules.remove(&28); // Enable reference-links if links-at-end is enabled
-    }
-
-    let use_reference = !link_skip_rules.contains(&28) && !use_inline;
-    // place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
-    let place_at_beginning = link_skip_rules.contains(&29) && use_reference;
-
-    if use_inline || use_reference {
-        convert_links_in_document(&mut output, use_inline, use_reference, place_at_beginning);
-        changes_made = true;
     }
 
     // Apply document-level "after" replacements for multi-line patterns
@@ -4812,8 +4823,39 @@ mod tests {
         assert!(is_list_item("1. Item"));
         assert!(is_list_item("   * Item"));
         assert!(is_list_item("\t* Item"));
+        // Emphasis at start of paragraph should NOT be treated as a list marker
+        assert!(!is_list_item("*This is emphasis*"));
+        assert!(!is_list_item("*This"));
         assert!(!is_list_item("Not a list"));
         assert!(!is_list_item(""));
+    }
+
+    #[test]
+    fn test_emphasis_at_line_start_not_list_item() {
+        let input = concat!(
+            "*This is a full-line phrase with an emphasis by surrounding asterisks.*\n\n",
+            "*This is an emphasis* by asterisks at the beginning of a paragraph.\n\n",
+            "_This is a full-line phrase with an emphasis by surrounding underscores._\n\n",
+            "_This is an emphasis_ by underscores at the beginning of a paragraph.\n",
+        );
+
+        // Use wide wrapping to avoid wrap affecting assertions
+        let output = process_test_content_with_width(input, 120);
+
+        // Should not be rewritten into list items ("* " prefix)
+        assert!(
+            !output.contains("* This is"),
+            "Unexpected list marker spacing inserted: {}",
+            output
+        );
+
+        // Asterisk emphasis should remain asterisk emphasis at line start
+        assert!(output.contains("*This is a full-line phrase with an emphasis by surrounding asterisks.*"));
+        assert!(output.contains("*This is an emphasis* by asterisks at the beginning of a paragraph."));
+
+        // Underscore emphasis will normalize to asterisks, but should still NOT become list items
+        assert!(output.contains("*This is a full-line phrase with an emphasis by surrounding underscores.*"));
+        assert!(output.contains("*This is an emphasis* by underscores at the beginning of a paragraph."));
     }
 
     #[test]
@@ -4846,7 +4888,9 @@ mod tests {
         file.flush().unwrap();
         let path = file.path().to_str().unwrap();
 
-        let skip_rules = HashSet::new();
+        let mut skip_rules = HashSet::new();
+        // Rule 30 (inline-links) is disabled by default
+        skip_rules.insert(30);
         // Use overwrite=true so the file is actually modified
         process_file(path, width, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -4872,6 +4916,33 @@ mod tests {
         // Should convert to reference link format
         assert!(output.contains("[link]"));
         assert!(output.contains("[1]: https://example.com"));
+    }
+
+    #[test]
+    fn test_wrap_after_link_conversion_keeps_prose_longer() {
+        // Long inline URL would normally force early wrapping; after conversion to reference-style,
+        // the sentence should fit in a narrow width without splitting around the link token.
+        let input = "This is a [link](https://example.com/this/is/a/very/long/path/that/would/force/wrapping) in text.\n";
+        let output = process_test_content_with_width(input, 40);
+
+        // Converted link should appear in the prose line (not orphaned on its own line)
+        assert!(
+            output.lines().any(|l| l.trim_end() == "This is a [link][1] in text."),
+            "Output:\n{}",
+            output
+        );
+
+        // Reference definition should remain intact as a single line (not wrapped)
+        assert!(
+            output
+                .lines()
+                .any(|l| l.contains("[1]: https://example.com/this/is/a/very/long/path/that/would/force/wrapping")),
+            "Output:\n{}",
+            output
+        );
+
+        // Original inline form should be gone
+        assert!(!output.contains("](https://example.com/this/is/a/very/long/path/that/would/force/wrapping)"));
     }
 
     #[test]

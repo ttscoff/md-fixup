@@ -987,13 +987,16 @@ def normalize_ial_spacing(line):
     """Normalize IAL (Inline Attribute List) spacing
 
     Normalizes both Kramdown-style ({: ...}) and Pandoc-style ({...}) IALs:
-    - Kramdown: {: #id .class} -> {: #id .class} (space after colon, no trailing space)
+    - Kramdown: {:.class #id} -> {: .class #id } (space after colon, trailing space before })
     - Pandoc: { #id .class } -> {#id .class} (no space after opening brace, no trailing space)
     - Normalizes spacing between attributes (single space)
     """
     # Preserve newline
     has_newline = line.endswith('\n')
     line_no_nl = line.rstrip('\n')
+
+    # Don't modify inline code spans like `{:.tip}` or `{%tag%}` when backticked
+    code_span_re = re.compile(r'`+[^`]*`+')
 
     # Pattern to match IALs: {: ...} or {...}
     # This matches both Kramdown-style (with colon) and Pandoc-style (without colon)
@@ -1010,16 +1013,64 @@ def normalize_ial_spacing(line):
 
         # Determine if it's Kramdown-style (has colon) or Pandoc-style (no colon)
         if ':' in opening:
-            # Kramdown-style: {: attributes}
-            # Ensure space after colon, no trailing space
-            return '{: ' + normalized_content + '}'
+            # Kramdown-style: ensure spaces inside `{:` and `}`
+            return '{: ' + normalized_content + ' }'
         else:
             # Pandoc-style: {attributes}
             # No space after opening brace, no trailing space
             return '{' + normalized_content + '}'
 
-    # Replace all IALs in the line
-    normalized = re.sub(ial_pattern, normalize_ial, line_no_nl)
+    # Replace all IALs in the line, but leave backticked code spans unchanged
+    parts = []
+    last = 0
+    for m in code_span_re.finditer(line_no_nl):
+        # Process text before code span
+        segment = line_no_nl[last:m.start()]
+        segment = re.sub(ial_pattern, normalize_ial, segment)
+        parts.append(segment)
+        # Keep code span as-is
+        parts.append(m.group(0))
+        last = m.end()
+    tail = line_no_nl[last:]
+    tail = re.sub(ial_pattern, normalize_ial, tail)
+    parts.append(tail)
+    normalized = ''.join(parts)
+    return normalized + ('\n' if has_newline else '')
+
+def normalize_liquid_tag_spacing(line):
+    """Normalize Liquid tag spacing
+
+    Ensures spaces inside `{%` and `%}` so `{%tag%}` becomes `{% tag %}`.
+    Supports whitespace-control variants like `{%-tag-%}` -> `{%- tag -%}`.
+    Does not modify backticked inline code spans.
+    """
+    has_newline = line.endswith('\n')
+    line_no_nl = line.rstrip('\n')
+
+    code_span_re = re.compile(r'`+[^`]*`+')
+    liquid_re = re.compile(r'(\{%-?)(.*?)(-?%\})')
+
+    def repl(m):
+        opening = m.group(1)
+        content = m.group(2).strip()
+        closing = m.group(3)
+        if not content:
+            return f"{opening} {closing}"
+        return f"{opening} {content} {closing}"
+
+    parts = []
+    last = 0
+    for m in code_span_re.finditer(line_no_nl):
+        segment = line_no_nl[last:m.start()]
+        segment = liquid_re.sub(repl, segment)
+        parts.append(segment)
+        parts.append(m.group(0))
+        last = m.end()
+    tail = line_no_nl[last:]
+    tail = liquid_re.sub(repl, tail)
+    parts.append(tail)
+
+    normalized = ''.join(parts)
     return normalized + ('\n' if has_newline else '')
 
 def normalize_fenced_code_lang(line):
@@ -2005,6 +2056,7 @@ LINTING_RULES = {
     28: ("Convert links to numeric reference links", "reference-links"),
     29: ("Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)", "links-at-end"),
     30: ("Convert links to inline format (overrides reference-links if enabled)", "inline-links"),
+    31: ("Normalize Liquid tag spacing", "liquid-tags"),
 }
 
 # Create keyword to rule number mapping
@@ -2694,6 +2746,13 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
             normalized_ial = normalize_ial_spacing(line)
             if normalized_ial != line:
                 line = normalized_ial
+                changes_made = True
+
+        # Normalize Liquid tag spacing: `{%tag%}` -> `{% tag %}`
+        if 31 not in skip_rules:
+            normalized_liquid = normalize_liquid_tag_spacing(line)
+            if normalized_liquid != line:
+                line = normalized_liquid
                 changes_made = True
 
         # Normalize reference-style link definitions

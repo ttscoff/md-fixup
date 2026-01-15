@@ -957,25 +957,97 @@ fn normalize_ial_spacing(line: &str) -> String {
     let has_newline = line.ends_with('\n');
     let line_no_nl = line.trim_end_matches('\n');
 
+    // Avoid modifying inline code spans like `{: .class}` or `{%tag%}`
+    let code_span_re = Regex::new(r"`+[^`]*`+").unwrap();
+    let protected_ranges: Vec<(usize, usize)> = code_span_re
+        .find_iter(line_no_nl)
+        .map(|m| (m.start(), m.end()))
+        .collect();
+    let is_protected = |pos: usize| -> bool {
+        protected_ranges
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
+    };
+
     let re = Regex::new(r"(\{:?\s*)([^}]*?)(\s*\})").unwrap();
-    let result = re.replace_all(line_no_nl, |caps: &regex::Captures| {
-        let opening = caps.get(1).unwrap().as_str();
-        let content = caps.get(2).unwrap().as_str();
+    let mut out = String::new();
+    let mut last_end = 0;
 
-        let normalized_content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    for caps in re.captures_iter(line_no_nl) {
+        let full_match = caps.get(0).unwrap();
+        let start = full_match.start();
+        let end = full_match.end();
+        out.push_str(&line_no_nl[last_end..start]);
 
-        if opening.contains(':') {
-            format!("{{: {}}}", normalized_content)
+        if is_protected(start) {
+            out.push_str(full_match.as_str());
         } else {
-            format!("{{{}}}", normalized_content)
-        }
-    });
+            let opening = caps.get(1).unwrap().as_str();
+            let content = caps.get(2).unwrap().as_str();
+            let normalized_content = content.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    if has_newline {
-        format!("{}\n", result)
-    } else {
-        result.to_string()
+            if opening.contains(':') {
+                // Kramdown-style: ensure spaces inside `{:` and `}`
+                out.push_str(&format!("{{: {} }}", normalized_content));
+            } else {
+                // Pandoc-style: preserve existing behavior (no inner padding)
+                out.push_str(&format!("{{{}}}", normalized_content));
+            }
+        }
+
+        last_end = end;
     }
+
+    out.push_str(&line_no_nl[last_end..]);
+    if has_newline { format!("{}\n", out) } else { out }
+}
+
+fn normalize_liquid_tag_spacing(line: &str) -> String {
+    let has_newline = line.ends_with('\n');
+    let line_no_nl = line.trim_end_matches('\n');
+
+    // Avoid modifying inline code spans like `{%tag%}` in backticks
+    let code_span_re = Regex::new(r"`+[^`]*`+").unwrap();
+    let protected_ranges: Vec<(usize, usize)> = code_span_re
+        .find_iter(line_no_nl)
+        .map(|m| (m.start(), m.end()))
+        .collect();
+    let is_protected = |pos: usize| -> bool {
+        protected_ranges
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
+    };
+
+    // Supports whitespace-control variants: {%- ... -%}
+    let re = Regex::new(r"(\{%-?)(.*?)(-?%\})").unwrap();
+    let mut out = String::new();
+    let mut last_end = 0;
+
+    for caps in re.captures_iter(line_no_nl) {
+        let full_match = caps.get(0).unwrap();
+        let start = full_match.start();
+        let end = full_match.end();
+        out.push_str(&line_no_nl[last_end..start]);
+
+        if is_protected(start) {
+            out.push_str(full_match.as_str());
+        } else {
+            let opening = caps.get(1).unwrap().as_str(); // `{%` or `{%-`
+            let content = caps.get(2).unwrap().as_str().trim();
+            let closing = caps.get(3).unwrap().as_str(); // `%}` or `-%}`
+
+            if content.is_empty() {
+                out.push_str(&format!("{} {}", opening, closing));
+            } else {
+                out.push_str(&format!("{} {} {}", opening, content, closing));
+            }
+        }
+
+        last_end = end;
+    }
+
+    out.push_str(&line_no_nl[last_end..]);
+    if has_newline { format!("{}\n", out) } else { out }
 }
 
 fn normalize_fenced_code_lang(line: &str) -> String {
@@ -1004,14 +1076,79 @@ fn normalize_task_checkbox(line: &str) -> String {
     .to_string()
 }
 
+fn normalize_blockquote_markers(line: &str) -> String {
+    let has_newline = line.ends_with('\n');
+    let line_no_nl = line.trim_end_matches('\n');
+
+    // Only rewrite a leading blockquote marker chain, preserving indentation and the rest of the line.
+    // This normalizes `> >` -> `>>` but does NOT change spacing after the final `>`.
+    let indent_len = line_no_nl.len() - line_no_nl.trim_start().len();
+    let bytes = line_no_nl.as_bytes();
+    if indent_len >= bytes.len() || bytes[indent_len] != b'>' {
+        return line.to_string();
+    }
+
+    let mut i = indent_len;
+    let mut depth = 0usize;
+    let mut last_gt = indent_len;
+
+    loop {
+        if i < bytes.len() && bytes[i] == b'>' {
+            depth += 1;
+            last_gt = i;
+            i += 1;
+        } else {
+            break;
+        }
+
+        // Consume whitespace between markers / after marker (we preserve it via remainder slice).
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+
+        // Continue marker chain only if next non-space is another '>'
+        if i < bytes.len() && bytes[i] == b'>' {
+            continue;
+        }
+        break;
+    }
+
+    let mut out = String::new();
+    out.push_str(&line_no_nl[..indent_len]);
+    out.push_str(&">".repeat(depth));
+    out.push_str(&line_no_nl[(last_gt + 1)..]);
+    if has_newline {
+        out.push('\n');
+    }
+    out
+}
+
 fn normalize_blockquote_spacing(line: &str) -> String {
-    let re = Regex::new(r"^(\s*)>([^\s>])").unwrap();
-    re.replace(line, |caps: &regex::Captures| {
-        let indent = caps.get(1).unwrap().as_str();
-        let content = caps.get(2).unwrap().as_str();
-        format!("{}> {}", indent, content)
-    })
-    .to_string()
+    let has_newline = line.ends_with('\n');
+    let line_no_nl = line.trim_end_matches('\n');
+
+    // Ensure exactly one space after a leading run of `>` markers when followed immediately by content.
+    // Examples:
+    // - `>Text` -> `> Text`
+    // - `>>Text` -> `>> Text`
+    // - `> >Text` is NOT modified here (that is handled by blockquote-markers, if enabled)
+    let re = Regex::new(r"^(\s*)(>+)([^\s>])").unwrap();
+    let normalized = re
+        .replace(line_no_nl, |caps: &regex::Captures| {
+            format!(
+                "{}{} {}",
+                caps.get(1).unwrap().as_str(),
+                caps.get(2).unwrap().as_str(),
+                caps.get(3).unwrap().as_str()
+            )
+        })
+        .to_string();
+
+    if has_newline {
+        format!("{}\n", normalized)
+    } else {
+        normalized
+    }
 }
 
 fn normalize_math_spacing(line: &str, is_in_code_block: bool) -> String {
@@ -1977,6 +2114,103 @@ fn is_blockquote(line: &str) -> bool {
     line.trim_start().starts_with('>')
 }
 
+fn get_blockquote_prefix_preserve_markers(line: &str) -> Option<String> {
+    let line_no_nl = line.trim_end_matches('\n');
+    let indent_len = line_no_nl.len() - line_no_nl.trim_start().len();
+    let bytes = line_no_nl.as_bytes();
+    if indent_len >= bytes.len() || bytes[indent_len] != b'>' {
+        return None;
+    }
+
+    let mut i = indent_len;
+    let mut last_gt = indent_len;
+    loop {
+        if i < bytes.len() && bytes[i] == b'>' {
+            last_gt = i;
+            i += 1;
+        } else {
+            break;
+        }
+
+        // Consume whitespace between markers / after marker.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+
+        // Continue marker chain only if next non-space is another '>'
+        if i < bytes.len() && bytes[i] == b'>' {
+            continue;
+        }
+        break;
+    }
+
+    Some(line_no_nl[..(last_gt + 1)].to_string())
+}
+
+fn blockquote_depth_and_remainder(line: &str) -> (usize, &str) {
+    let mut s = line.trim_start();
+    let mut depth = 0usize;
+    loop {
+        if let Some(rest) = s.strip_prefix('>') {
+            depth += 1;
+            s = rest.trim_start();
+        } else {
+            break;
+        }
+    }
+    (depth, s)
+}
+
+fn deflist_item_depth(line: &str) -> Option<usize> {
+    let (depth, remainder) = blockquote_depth_and_remainder(line);
+    let r = remainder.trim_start();
+    r.strip_prefix(':')
+        .and_then(|after| {
+            if after.starts_with(char::is_whitespace) {
+                Some(depth)
+            } else {
+                None
+            }
+        })
+}
+
+fn quote_blank_depth(line: &str) -> Option<usize> {
+    let (depth, remainder) = blockquote_depth_and_remainder(line);
+    if depth > 0 && remainder.trim().is_empty() {
+        Some(depth)
+    } else {
+        None
+    }
+}
+
+fn next_deflist_item_depth(lines: &[String], start: usize) -> Option<usize> {
+    for j in start..lines.len() {
+        let line = &lines[j];
+        if line.trim().is_empty() {
+            continue;
+        }
+        if quote_blank_depth(line).is_some() {
+            continue;
+        }
+        return deflist_item_depth(line);
+    }
+    None
+}
+
+fn prev_nonblank_line_depth(output: &[String]) -> Option<usize> {
+    for line in output.iter().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if quote_blank_depth(line).is_some() {
+            continue;
+        }
+        let (depth, _) = blockquote_depth_and_remainder(line);
+        return Some(depth);
+    }
+    None
+}
+
 fn is_in_code_span(text: &str, pos: usize) -> bool {
     let before = &text[..pos];
     let mut backticks = 0;
@@ -2523,17 +2757,20 @@ fn convert_links_in_document(
 }
 
 fn get_blockquote_prefix(line: &str) -> String {
-    let re = Regex::new(r"^(\s*)").unwrap();
-    let spaces = if let Some(caps) = re.captures(line) {
-        caps.get(1).unwrap().as_str()
-    } else {
-        ""
-    };
-    if line.trim_start().starts_with('>') {
-        format!("{}>", spaces)
-    } else {
-        String::new()
+    let line_no_nl = line.trim_end_matches('\n');
+    let indent_len = line_no_nl.len() - line_no_nl.trim_start().len();
+    let indent = &line_no_nl[..indent_len];
+    let mut s = line_no_nl[indent_len..].trim_start();
+    if !s.starts_with('>') {
+        return String::new();
     }
+
+    let mut depth = 0usize;
+    while let Some(rest) = s.strip_prefix('>') {
+        depth += 1;
+        s = rest.trim_start();
+    }
+    format!("{}{}", indent, ">".repeat(depth))
 }
 
 fn should_preserve_line(line: &str) -> bool {
@@ -2759,6 +2996,8 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 28, description: "Convert links to numeric reference links", keyword: "reference-links" },
     LintingRule { num: 29, description: "Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)", keyword: "links-at-end" },
     LintingRule { num: 30, description: "Convert links to inline format (overrides reference-links if enabled)", keyword: "inline-links" },
+    LintingRule { num: 31, description: "Normalize Liquid tag spacing", keyword: "liquid-tags" },
+    LintingRule { num: 32, description: "Normalize blockquote marker chains (remove spaces between > markers)", keyword: "blockquote-markers" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -3543,6 +3782,15 @@ fn process_file(
             }
         }
 
+        // Normalize Liquid tag spacing: `{%tag%}` -> `{% tag %}`
+        if !skip_rules.contains(&31) {
+            let normalized_liquid = normalize_liquid_tag_spacing(&line);
+            if normalized_liquid != line {
+                line = normalized_liquid;
+                changes_made = true;
+            }
+        }
+
         // Normalize reference-style link definitions
         if !skip_rules.contains(&18) {
             let normalized_ref = normalize_reference_link(&line);
@@ -3971,10 +4219,33 @@ fn process_file(
         }
 
         // Handle blockquotes
+        // Compress definition lists inside blockquotes:
+        // remove quote-only "blank" lines (e.g., `>` / `> >`) that occur before a `:...` item
+        // at the same quote depth.
+        if !skip_rules.contains(&3) {
+            if let Some(blank_depth) = quote_blank_depth(&line) {
+                let prev_depth = prev_nonblank_line_depth(&output);
+                let next_depth = next_deflist_item_depth(&lines, i + 1);
+                if prev_depth == Some(blank_depth) && next_depth == Some(blank_depth) {
+                    changes_made = true;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
         if is_blockquote(&line) {
             // Clear list context when encountering a blockquote (non-list element)
             list_context_stack.clear();
             current_list_indent_unit = None;
+
+            // Normalize blockquote marker chains (spaces between `>` markers)
+            if !skip_rules.contains(&32) {
+                let normalized_markers = normalize_blockquote_markers(&line);
+                if normalized_markers != line {
+                    line = normalized_markers;
+                    changes_made = true;
+                }
+            }
 
             if !skip_rules.contains(&20) {
                 let normalized_bq = normalize_blockquote_spacing(&line);
@@ -3984,8 +4255,21 @@ fn process_file(
                 }
             }
 
-            let prefix = get_blockquote_prefix(&line);
-            let content = line[prefix.len()..].trim_start();
+            let (prefix, content) = if skip_rules.contains(&32) {
+                // Preserve original marker spacing in wrapped output when blockquote-markers is skipped.
+                if let Some(p) = get_blockquote_prefix_preserve_markers(&line) {
+                    let c = line[p.len()..].trim_start();
+                    (p, c)
+                } else {
+                    let p = get_blockquote_prefix(&line);
+                    let c = line[p.len()..].trim_start();
+                    (p, c)
+                }
+            } else {
+                let p = get_blockquote_prefix(&line);
+                let c = line[p.len()..].trim_start();
+                (p, c)
+            };
 
             if !skip_rules.contains(&14) {
                 if !content.is_empty() && line.trim_end().chars().count() > wrap_width {
@@ -4071,6 +4355,16 @@ fn process_file(
         } else {
             // Handle blank lines - collapse multiple (max 1 consecutive, except in code blocks)
             if !skip_rules.contains(&3) {
+                // Compress definition lists:
+                // remove blank lines before a `:...` item (non-blockquoted).
+                let prev_depth = prev_nonblank_line_depth(&output);
+                let next_depth = next_deflist_item_depth(&lines, i + 1);
+                if prev_depth == Some(0) && next_depth == Some(0) {
+                    changes_made = true;
+                    i += 1;
+                    continue;
+                }
+
                 consecutive_blank_lines += 1;
                 if consecutive_blank_lines <= 1 {
                     output.push("\n".to_string());
@@ -4859,6 +5153,80 @@ mod tests {
     }
 
     #[test]
+    fn test_definition_list_compression() {
+        let input = "Term\n\n: definition 1\n\n: definition 2\n";
+        let output = process_test_content(input);
+        assert!(
+            output.contains("Term\n: definition 1\n"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            output.contains(": definition 1\n: definition 2\n"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            !output.contains(": definition 1\n\n: definition 2"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_definition_list_compression_in_blockquote() {
+        let input = "> Term\n>\n> : definition 1\n>\n> : definition 2\n";
+        let output = process_test_content(input);
+        assert!(
+            output.contains("> Term\n> : definition 1\n> : definition 2\n"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("> : definition 1\n>\n> : definition 2"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("> Term\n>\n> : definition 1"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_nested_blockquote_marker_spacing() {
+        let input = "> > This is a nested blockquote\n";
+        let output = process_test_content(input);
+        assert!(
+            output.contains(">> This is a nested blockquote"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("> > This is a nested blockquote"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_nested_blockquote_marker_spacing_can_be_skipped() {
+        let input = "> > This is a nested blockquote\n";
+        let mut skip_rules = HashSet::new();
+        // Rule 30 (inline-links) is disabled by default in tests
+        skip_rules.insert(30);
+        // Skip blockquote marker compression
+        skip_rules.insert(32);
+        let output = process_test_content_with_skip(input, &skip_rules);
+        assert!(
+            output.contains("> > This is a nested blockquote"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_table_not_wrapped() {
         let input = "| Very long column header | Short | Another header |\n| --- | --- | --- |\n| Cell with very long content that should not wrap | Data | More data |\n";
         // Use narrow width to ensure wrapping would happen for regular text
@@ -5476,5 +5844,49 @@ mod tests {
         assert!(output.contains("bar"));
         // Code block should have been modified
         assert!(!output.contains("```\nfoo bar\n```") || output.contains("```\nbar bar\n```"));
+    }
+
+    #[test]
+    fn test_normalize_liquid_tag_spacing_basic() {
+        assert_eq!(
+            normalize_liquid_tag_spacing("Before {%tag%} after\n"),
+            "Before {% tag %} after\n"
+        );
+        assert_eq!(
+            normalize_liquid_tag_spacing("{%  tag   a=b  %}\n"),
+            "{% tag   a=b %}\n"
+        );
+        assert_eq!(
+            normalize_liquid_tag_spacing("{%-tag-%}\n"),
+            "{%- tag -%}\n"
+        );
+    }
+
+    #[test]
+    fn test_normalize_liquid_tag_spacing_preserves_code_spans() {
+        assert_eq!(
+            normalize_liquid_tag_spacing("`{%tag%}` and {%tag%}\n"),
+            "`{%tag%}` and {% tag %}\n"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ial_spacing_kramdown_trailing_space() {
+        assert_eq!(
+            normalize_ial_spacing("A {:.tip}\n"),
+            "A {: .tip }\n"
+        );
+        assert_eq!(
+            normalize_ial_spacing("{:   #id   .class }\n"),
+            "{: #id .class }\n"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ial_spacing_preserves_code_spans() {
+        assert_eq!(
+            normalize_ial_spacing("`{:.tip}` and {:.tip}\n"),
+            "`{:.tip}` and {: .tip }\n"
+        );
     }
 }

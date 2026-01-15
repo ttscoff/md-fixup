@@ -6,11 +6,11 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 27 different normalization and formatting rules:
+md-fixup performs 32 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
-3. Collapses multiple blank lines (max 1 consecutive, except in code blocks)
+3. Collapses multiple blank lines (max 1 consecutive, except in code blocks) and compresses definition lists (`:\s+`)
 4. Normalizes headline spacing (exactly 1 space after #)
 5. Ensures blank line after headline
 6. Ensures blank line before code block
@@ -35,6 +35,13 @@ md-fixup performs 27 different normalization and formatting rules:
 25. Normalizes bold/italic markers (bold: always __, italic: always *). Intra-word underscores (e.g., in filenames like `_my_file_name.md`) are preserved and not converted to emphasis markers.
 26. Normalizes list markers (renumber ordered lists, standardize bullet markers by level)
 27. Resets ordered lists to start at 1 (if disabled, preserves starting number)
+28. Converts links to numeric reference links
+29. Places link definitions at the end of the document
+30. Converts links to inline format (overrides numeric reference links)
+31. Normalizes Liquid tag spacing (`{%tag%}` -> `{% tag %}`)
+32. Normalizes blockquote marker chains (removes spaces between leading `>` markers, e.g. `> >` -> `>>`)
+
+**Definition lists:** md-fixup compresses definition lists by removing blank lines before and between consecutive definition items (`:\s+`). This also works inside blockquotes (removing quote-only blank lines like `>` between definition items). This behavior is part of rule `3` (`blank-lines`).
 
 
 Table cleanup algorithm by [Dr. Drang](https://leancrew.com/).
@@ -117,7 +124,7 @@ Rules can be skipped using either their number or keyword:
 
 - `1` / `line-endings` - Normalize line endings to Unix
 - `2` / `trailing` - Trim trailing whitespace
-- `3` / `blank-lines` - Collapse multiple blank lines
+- `3` / `blank-lines` - Collapse multiple blank lines (also compresses definition lists, `:\s+`)
 - `4` / `header-spacing` - Normalize headline spacing
 - `5` / `header-newline` - Ensure blank line after headline
 - `6` / `code-before` - Ensure blank line before code block
@@ -142,6 +149,11 @@ Rules can be skipped using either their number or keyword:
 - `25` / `bold-italic` - Normalize bold/italic markers (preserves intra-word underscores in filenames like `_my_file_name.md`)
 - `26` / `list-markers` - Normalize list markers (renumber ordered lists, standardize bullet markers by level)
 - `27` / `list-reset` - Reset ordered lists to start at 1 (if disabled, preserves starting number)
+- `28` / `reference-links` - Convert links to numeric reference links
+- `29` / `links-at-end` - Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)
+- `30` / `inline-links` - Convert links to inline format (overrides reference-links if enabled)
+- `31` / `liquid-tags` - Normalize Liquid tag spacing
+- `32` / `blockquote-markers` - Normalize blockquote marker chains (remove spaces between `>` markers)
 
 Group keywords (expand to multiple rules):
 

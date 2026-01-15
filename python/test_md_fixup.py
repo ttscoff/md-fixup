@@ -149,6 +149,45 @@ class TestListNormalization(unittest.TestCase):
         self.assertIn("<!-- -->", output)
         self.assertIn("1. An interrupted numbered list", output)
 
+
+class TestLiquidAndIalSpacing(unittest.TestCase):
+    def test_liquid_tag_spacing(self):
+        content = "Before {%tag%} after\n"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn("{% tag %}", output)
+
+    def test_liquid_tag_spacing_preserves_code_span(self):
+        content = "`{%tag%}` and {%tag%}\n"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn("`{%tag%}`", output)
+        self.assertIn("{% tag %}", output)
+
+    def test_kramdown_ial_trailing_space(self):
+        content = "A {:.tip}\n"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn("A {: .tip }", output)
+
     def test_interrupted_list_same_indentation(self):
         """Test that interruption only happens at same indentation level"""
         content = """1. First

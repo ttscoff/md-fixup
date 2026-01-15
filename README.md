@@ -6,7 +6,7 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 32 different normalization and formatting rules:
+md-fixup performs 33 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
@@ -40,6 +40,7 @@ md-fixup performs 32 different normalization and formatting rules:
 30. Converts links to inline format (overrides numeric reference links)
 31. Normalizes Liquid tag spacing (`{%tag%}` -> `{% tag %}`)
 32. Normalizes blockquote marker chains (removes spaces between leading `>` markers, e.g. `> >` -> `>>`)
+33. Compresses list spacing by removing unnecessary blank lines between list items (bulleted and numbered)
 
 **Definition lists:** md-fixup compresses definition lists by removing blank lines before and between consecutive definition items (`:\s+`). This also works inside blockquotes (removing quote-only blank lines like `>` between definition items). This behavior is part of rule `3` (`blank-lines`).
 
@@ -154,6 +155,7 @@ Rules can be skipped using either their number or keyword:
 - `30` / `inline-links` - Convert links to inline format (overrides reference-links if enabled)
 - `31` / `liquid-tags` - Normalize Liquid tag spacing
 - `32` / `blockquote-markers` - Normalize blockquote marker chains (remove spaces between `>` markers)
+- `33` / `compress-lists` - Compress list spacing by removing unnecessary blank lines between list items
 
 Group keywords (expand to multiple rules):
 

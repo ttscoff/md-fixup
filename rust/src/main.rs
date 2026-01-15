@@ -2000,6 +2000,25 @@ fn get_list_indent(line: &str) -> usize {
     }
 }
 
+fn prev_nonblank_output_line(output: &[String]) -> Option<&str> {
+    for line in output.iter().rev() {
+        if !line.trim().is_empty() {
+            return Some(line.as_str());
+        }
+    }
+    None
+}
+
+fn next_nonblank_input_line(lines: &[String], start: usize) -> Option<&str> {
+    for j in start..lines.len() {
+        let line = lines[j].as_str();
+        if !line.trim().is_empty() {
+            return Some(line);
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ListType {
     Numbered,
@@ -2998,6 +3017,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 30, description: "Convert links to inline format (overrides reference-links if enabled)", keyword: "inline-links" },
     LintingRule { num: 31, description: "Normalize Liquid tag spacing", keyword: "liquid-tags" },
     LintingRule { num: 32, description: "Normalize blockquote marker chains (remove spaces between > markers)", keyword: "blockquote-markers" },
+    LintingRule { num: 33, description: "Compress list item spacing (remove unnecessary blank lines between items)", keyword: "compress-lists" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -3730,8 +3750,20 @@ fn process_file(
                 && i + 1 < lines.len()
                 && !lines[i + 1].trim().is_empty()
             {
-                output.push("\n".to_string());
-                changes_made = true;
+                // If this fenced code block is indented (part of a list item) and the next content
+                // is a list item, avoid forcing a blank line before the next item when compress-lists
+                // is enabled.
+                let is_indented_fence = line
+                    .trim_end_matches('\n')
+                    .starts_with(' ')
+                    || line.trim_end_matches('\n').starts_with('\t');
+                let next_is_list = next_nonblank_input_line(&lines, i + 1)
+                    .map(is_list_item)
+                    .unwrap_or(false);
+                if !(is_indented_fence && next_is_list && !skip_rules.contains(&33)) {
+                    output.push("\n".to_string());
+                    changes_made = true;
+                }
             }
 
             i += 1;
@@ -4123,7 +4155,14 @@ fn process_file(
                 let prev_line = &output[output.len() - 1];
                 if !is_list_item(prev_line) {
                     let prev_stripped = prev_line.trim();
-                    if !prev_stripped.starts_with('>') && !prev_stripped.starts_with('#') {
+                    // When compress-lists is enabled, do not force a blank line before a list item
+                    // if the previous line is indented (i.e., likely part of the preceding list item).
+                    let prev_is_indented =
+                        prev_line.starts_with(' ') || prev_line.starts_with('\t');
+                    if !prev_stripped.starts_with('>')
+                        && !prev_stripped.starts_with('#')
+                        && !(prev_is_indented && !skip_rules.contains(&33))
+                    {
                         output.push("\n".to_string());
                         changes_made = true;
                     }
@@ -4354,6 +4393,23 @@ fn process_file(
             consecutive_blank_lines = 0;
         } else {
             // Handle blank lines - collapse multiple (max 1 consecutive, except in code blocks)
+            if !skip_rules.contains(&33) {
+                if let Some(next_line) = next_nonblank_input_line(&lines, i + 1) {
+                    if is_list_item(next_line) {
+                        if let Some(prev_line) = prev_nonblank_output_line(&output) {
+                            let prev_trimmed = prev_line.trim_end_matches('\n');
+                            let prev_is_list = is_list_item(prev_trimmed);
+                            let prev_is_indented =
+                                prev_trimmed.starts_with(' ') || prev_trimmed.starts_with('\t');
+                            if prev_is_list || prev_is_indented {
+                                changes_made = true;
+                                i += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
             if !skip_rules.contains(&3) {
                 // Compress definition lists:
                 // remove blank lines before a `:...` item (non-blockquoted).
@@ -5221,6 +5277,77 @@ mod tests {
         let output = process_test_content_with_skip(input, &skip_rules);
         assert!(
             output.contains("> > This is a nested blockquote"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_compress_lists_between_items() {
+        let input = concat!(
+            "* item 1\n\n",
+            "* item 2\n\n",
+            "    * item 3\n\n",
+            "    * item 4\n\n",
+            "        But this one contains a paragraph\n",
+            "* item 5\n\n\n",
+            "    ```\n",
+            "    code\n",
+            "    ```\n\n",
+            "* item 6\n",
+            "1. numbered 1\n\n",
+            "2. numbered 2\n",
+        );
+        let output = process_test_content(input);
+
+        // No blank lines between simple consecutive list items
+        assert!(output.contains("* item 1\n* item 2\n"), "Output:\n{}", output);
+        // Nested markers/indent will be normalized (tabs and `-` marker at level 1)
+        assert!(output.contains("\t- item 3\n\t- item 4\n"), "Output:\n{}", output);
+
+        // Keep a blank line before the paragraph inside item 4 (but no extra blank line after)
+        assert!(
+            output.contains("\t- item 4\n\n        But this one contains a paragraph\n"),
+            "Output:\n{}",
+            output
+        );
+
+        // Keep a single blank line before the code block inside item 5 and remove blank line before next item
+        assert!(
+            output.contains("* item 5\n\n    ```\n    code\n    ```\n* item 6\n"),
+            "Output:\n{}",
+            output
+        );
+
+        // Numbered list items are compressed too
+        assert!(
+            output.contains("1. numbered 1\n2. numbered 2\n"),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_empty_lines_fixture_compresses_deflists_and_lists() {
+        let input = include_str!("../../tests/fixtures/empty-lines.md");
+        let output = process_test_content(input);
+
+        // Definition list is compressed
+        assert!(
+            output.contains("Term 1\n: Definition 1\n: Definition 2\n"),
+            "Output:\n{}",
+            output
+        );
+
+        // List items are compressed (no blank lines between items)
+        assert!(output.contains("* item 1\n* item 2\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("* item 2\n\t- item 3\n"),
+            "Output:\n{}",
+            output
+        );
+        assert!(
+            output.contains("\t- item 3\n\t- item 4\n"),
             "Output:\n{}",
             output
         );

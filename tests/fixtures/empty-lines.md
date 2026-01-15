@@ -51,3 +51,25 @@ And here is a task list:
 
 - [ ] Task 1
 - [ ] Task 2
+
+---
+
+* item 1
+
+
+
+* item 2
+
+
+
+	* item 3
+
+
+
+	* item 4
+
+
+
+		But this one contains a paragraph
+
+* item 5

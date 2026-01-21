@@ -3412,7 +3412,9 @@ fn apply_replacements_document(
         if replacement.timing != timing {
             continue;
         }
-        if !is_multiline_replacement_pattern(&replacement.pattern) {
+        // For "before" timing, process ALL replacements (single-line and multi-line) at document level
+        // so they are applied before link conversion. For "after" timing, only process multi-line patterns.
+        if timing == ReplacementTiming::After && !is_multiline_replacement_pattern(&replacement.pattern) {
             continue;
         }
 
@@ -3654,12 +3656,13 @@ fn process_file(
             }
         }
 
-        // Apply "before" replacements (early in processing)
+        // Apply "before" replacements are now handled at document level (before link conversion)
+        // Only apply "after" replacements here in the line-by-line phase
         if !replacements.is_empty() {
             let (new_line, changed) = apply_replacements(
                 &line,
                 replacements,
-                ReplacementTiming::Before,
+                ReplacementTiming::After,
                 in_code_block,
                 in_frontmatter,
             );

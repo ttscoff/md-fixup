@@ -1,6 +1,6 @@
 [package]
 name = "md-fixup"
-version = "0.1.35"
+version = "0.1.36"
 edition = "2021"
 authors = ["Brett Terpstra <github@brettterpstra.com>"]
 description = "Markdown linter that normalizes formatting and wraps text"

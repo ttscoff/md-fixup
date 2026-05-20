@@ -4349,7 +4349,11 @@ fn process_file(
 
             if !output.is_empty() && !output[output.len() - 1].trim().is_empty() {
                 let prev = output[output.len() - 1].trim();
-                if prev.starts_with("```") || is_list_item(&output[output.len() - 1]) {
+                let is_list_continuation =
+                    line_indent > 0 && is_list_item(&output[output.len() - 1]);
+                if !is_list_continuation
+                    && (prev.starts_with("```") || is_list_item(&output[output.len() - 1]))
+                {
                     output.push("\n".to_string());
                     changes_made = true;
                 }
@@ -5352,6 +5356,19 @@ mod tests {
         assert!(
             output.contains("\t- item 3\n\t- item 4\n"),
             "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_multi_line_list_items_fixture_length_preserved() {
+        let input = include_str!("../../tests/fixtures/multi-line-list-items.md");
+        let output = process_test_content(input);
+        assert_eq!(
+            output.len(),
+            input.len(),
+            "Output length differs from input length.\nInput:\n{}\nOutput:\n{}",
+            input,
             output
         );
     }

@@ -4117,6 +4117,21 @@ fn process_file(
             list_context_stack.clear();
             current_list_indent_unit = None;
 
+            // If this dash rule is acting as a setext underline (because setext->ATX is skipped
+            // or didn't apply), do NOT treat it like a horizontal rule for spacing purposes.
+            // Otherwise we can incorrectly insert a blank line between the heading text and the underline.
+            let is_setext_underline = is_dash_horizontal_rule(&line)
+                && i > 0
+                && {
+                    let prev = &lines[i - 1];
+                    !prev.trim().is_empty()
+                        && !is_headline(prev)
+                        && !is_horizontal_rule(prev)
+                        && !is_code_block(prev)
+                        && !is_list_item(prev)
+                        && !is_blockquote(prev)
+                };
+
             // Optional normalization (off by default): convert `---` (or longer dash HRs) to `* * * * *`
             // Must NOT affect setext headings when setext conversion is disabled.
             if !skip_rules.contains(&35) && is_dash_horizontal_rule(&line) {
@@ -4144,7 +4159,8 @@ fn process_file(
                 }
             }
 
-            if !skip_rules.contains(&10)
+            if !is_setext_underline
+                && !skip_rules.contains(&10)
                 && !output.is_empty()
                 && !output[output.len() - 1].trim().is_empty()
             {
@@ -4169,7 +4185,11 @@ fn process_file(
 
             output.push(line.clone());
 
-            if !skip_rules.contains(&11) && i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
+            if !is_setext_underline
+                && !skip_rules.contains(&11)
+                && i + 1 < lines.len()
+                && !lines[i + 1].trim().is_empty()
+            {
                 output.push("\n".to_string());
                 changes_made = true;
             }
@@ -5430,6 +5450,25 @@ mod tests {
         assert!(!output.contains("## Heading two"), "Output:\n{}", output);
         assert!(output.contains("Heading two"), "Output:\n{}", output);
         assert!(output.contains("---"), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_setext_h2_preserves_underline_when_setext_to_atx_disabled() {
+        // Regression test for issue #5: do not insert a blank line between setext heading and underline.
+        let input = "Alt-H2\n------\nParagraph text.\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(30); // inline-links disabled by default in tests
+        skip_rules.insert(34); // disable setext -> ATX normalization
+        skip_rules.insert(35); // hr-stars off (default), keep explicit for this test
+        let output = process_test_content_with_skip(input, &skip_rules);
+
+        assert!(
+            output.contains("Alt-H2\n------\n"),
+            "Output:\n{}",
+            output
+        );
+        assert!(!output.contains("Alt-H2\n\n------\n"), "Output:\n{}", output);
+        assert!(!output.contains("## Alt-H2"), "Output:\n{}", output);
     }
 
     #[test]

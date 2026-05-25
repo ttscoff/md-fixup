@@ -908,6 +908,30 @@ fn is_headline(line: &str) -> bool {
         || Regex::new(r"^#+[^\s#]").unwrap().is_match(stripped)
 }
 
+fn is_setext_heading(line: &str) -> bool {
+    let stripped = line.trim();
+    Regex::new(r"^(={2,}|-{2,})\s*$").unwrap().is_match(stripped)
+}
+
+fn normalize_setext_to_atx_headings(heading_line: &str, underline_line: &str) -> Option<String> {
+    if !is_setext_heading(underline_line) {
+        return None;
+    }
+
+    let heading_text = heading_line.trim();
+    if heading_text.is_empty() {
+        return None;
+    }
+
+    let level = if underline_line.trim_start().starts_with('=') {
+        1
+    } else {
+        2
+    };
+
+    Some(format!("{} {}\n", "#".repeat(level), heading_text))
+}
+
 fn is_horizontal_rule(line: &str) -> bool {
     let stripped = line.trim();
     Regex::new(r"^[-*_]{3,}$").unwrap().is_match(stripped)
@@ -3018,6 +3042,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 31, description: "Normalize Liquid tag spacing", keyword: "liquid-tags" },
     LintingRule { num: 32, description: "Normalize blockquote marker chains (remove spaces between > markers)", keyword: "blockquote-markers" },
     LintingRule { num: 33, description: "Compress list item spacing (remove unnecessary blank lines between items)", keyword: "compress-lists" },
+    LintingRule { num: 34, description: "Normalize setext headings to ATX headings", keyword: "setext-to-atx" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -3953,6 +3978,43 @@ fn process_file(
                     output.extend(normalized_table);
                     i = j;
                     consecutive_blank_lines = 0;
+                    continue;
+                }
+            }
+        }
+
+        // Convert setext headings to ATX headings to avoid ambiguity with horizontal rules.
+        if !skip_rules.contains(&34) && i + 1 < lines.len() {
+            if is_setext_heading(&lines[i + 1])
+                && !is_headline(&line)
+                && !is_horizontal_rule(&line)
+                && !is_code_block(&line)
+                && !is_list_item(&line)
+                && !is_blockquote(&line)
+            {
+                if let Some(normalized_heading) =
+                    normalize_setext_to_atx_headings(&line, &lines[i + 1])
+                {
+                    // Clear list context when encountering a heading (non-list element)
+                    list_context_stack.clear();
+                    current_list_indent_unit = None;
+
+                    output.push(normalized_heading);
+                    changes_made = true;
+
+                    if !skip_rules.contains(&5) && i + 2 < lines.len() {
+                        let next_line = &lines[i + 2];
+                        if !next_line.trim().is_empty()
+                            && !is_headline(next_line)
+                            && !is_code_block(next_line)
+                        {
+                            output.push("\n".to_string());
+                            changes_made = true;
+                        }
+                    }
+
+                    consecutive_blank_lines = 0;
+                    i += 2;
                     continue;
                 }
             }
@@ -5181,6 +5243,42 @@ mod tests {
         assert!(!is_list_item("*This"));
         assert!(!is_list_item("Not a list"));
         assert!(!is_list_item(""));
+    }
+
+    #[test]
+    fn test_setext_h1_converts_to_atx() {
+        let input = "Heading one\n====\nParagraph text.\n";
+        let output = process_test_content(input);
+        assert!(output.contains("# Heading one\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(!output.contains("\n====\n"), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_setext_h2_converts_to_atx_even_with_three_dashes() {
+        let input = "Heading two\n---\nParagraph text.\n";
+        let output = process_test_content(input);
+        assert!(output.contains("## Heading two\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(!output.contains("\n---\nParagraph"), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_horizontal_rule_without_setext_context_is_preserved() {
+        let input = "---\nParagraph text.\n";
+        let output = process_test_content(input);
+        assert!(output.contains("---\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(!output.contains("## "), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_setext_to_atx_can_be_disabled_with_rule_34() {
+        let input = "Heading two\n---\nParagraph text.\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(30); // Rule 30 (inline-links) is disabled by default in tests
+        skip_rules.insert(34); // Disable setext -> ATX normalization
+        let output = process_test_content_with_skip(input, &skip_rules);
+        assert!(!output.contains("## Heading two"), "Output:\n{}", output);
+        assert!(output.contains("Heading two"), "Output:\n{}", output);
+        assert!(output.contains("---"), "Output:\n{}", output);
     }
 
     #[test]

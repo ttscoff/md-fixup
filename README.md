@@ -6,7 +6,7 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 33 different normalization and formatting rules:
+md-fixup performs 34 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
@@ -41,6 +41,7 @@ md-fixup performs 33 different normalization and formatting rules:
 31. Normalizes Liquid tag spacing (`{%tag%}` -> `{% tag %}`)
 32. Normalizes blockquote marker chains (removes spaces between leading `>` markers, e.g. `> >` -> `>>`)
 33. Compresses list spacing by removing unnecessary blank lines between list items (bulleted and numbered)
+34. Normalizes setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 
 **Definition lists:** md-fixup compresses definition lists by removing blank lines before and between consecutive definition items (`:\s+`). This also works inside blockquotes (removing quote-only blank lines like `>` between definition items). This behavior is part of rule `3` (`blank-lines`).
 
@@ -156,6 +157,7 @@ Rules can be skipped using either their number or keyword:
 - `31` / `liquid-tags` - Normalize Liquid tag spacing
 - `32` / `blockquote-markers` - Normalize blockquote marker chains (remove spaces between `>` markers)
 - `33` / `compress-lists` - Compress list spacing by removing unnecessary blank lines between list items
+- `34` / `setext-to-atx` - Normalize setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 
 Group keywords (expand to multiple rules):
 
@@ -190,6 +192,7 @@ rules:
   include:
     - line-endings
     - blank-lines
+    - setext-to-atx
 ```
 
 Or to skip specific rules:
@@ -202,6 +205,7 @@ rules:
     - line-endings
     - blank-lines
     - wrap
+    - setext-to-atx
 ```
 
 **Configuration merging:**

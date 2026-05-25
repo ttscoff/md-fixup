@@ -910,7 +910,9 @@ fn is_headline(line: &str) -> bool {
 
 fn is_setext_heading(line: &str) -> bool {
     let stripped = line.trim();
-    Regex::new(r"^(={2,}|-{2,})\s*$").unwrap().is_match(stripped)
+    Regex::new(r"^(={2,}|-{2,})\s*$")
+        .unwrap()
+        .is_match(stripped)
 }
 
 fn has_yaml_frontmatter(lines: &[String]) -> bool {
@@ -1014,9 +1016,8 @@ fn has_table_pipe_outside_links_and_code(line: &str) -> bool {
     }
 
     protected.sort_by_key(|r| r.0);
-    let is_protected = |pos: usize| -> bool {
-        protected.iter().any(|(s, e)| pos >= *s && pos < *e)
-    };
+    let is_protected =
+        |pos: usize| -> bool { protected.iter().any(|(s, e)| pos >= *s && pos < *e) };
 
     for (idx, ch) in line_no_nl.char_indices() {
         if ch == '|' && !is_protected(idx) {
@@ -1113,7 +1114,11 @@ fn normalize_ial_spacing(line: &str) -> String {
     }
 
     out.push_str(&line_no_nl[last_end..]);
-    if has_newline { format!("{}\n", out) } else { out }
+    if has_newline {
+        format!("{}\n", out)
+    } else {
+        out
+    }
 }
 
 fn normalize_liquid_tag_spacing(line: &str) -> String {
@@ -1161,7 +1166,11 @@ fn normalize_liquid_tag_spacing(line: &str) -> String {
     }
 
     out.push_str(&line_no_nl[last_end..]);
-    if has_newline { format!("{}\n", out) } else { out }
+    if has_newline {
+        format!("{}\n", out)
+    } else {
+        out
+    }
 }
 
 fn normalize_fenced_code_lang(line: &str) -> String {
@@ -1598,24 +1607,22 @@ fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
                 // Use byte-based checking for ASCII characters
                 let preceded_by_word_char = start > 0 && {
                     let prev_byte = result_bytes[start - 1];
-                    (prev_byte >= b'a' && prev_byte <= b'z')
-                        || (prev_byte >= b'A' && prev_byte <= b'Z')
-                        || (prev_byte >= b'0' && prev_byte <= b'9')
-                        || prev_byte == b'_'
+                    prev_byte.is_ascii_alphanumeric() || prev_byte == b'_'
                 };
                 let followed_by_word_char = end < result_bytes.len() && {
                     let next_byte = result_bytes[end];
-                    (next_byte >= b'a' && next_byte <= b'z')
-                        || (next_byte >= b'A' && next_byte <= b'Z')
-                        || (next_byte >= b'0' && next_byte <= b'9')
-                        || next_byte == b'_'
+                    next_byte.is_ascii_alphanumeric() || next_byte == b'_'
                 };
 
                 // Also check for adjacent underscores (part of larger pattern like ___)
                 let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
                 let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
-                if preceded_by_underscore || followed_by_underscore || preceded_by_word_char || followed_by_word_char {
+                if preceded_by_underscore
+                    || followed_by_underscore
+                    || preceded_by_word_char
+                    || followed_by_word_char
+                {
                     // Keep original (not at word boundary or part of larger pattern)
                     new_result.push_str(full_match.as_str());
                 } else {
@@ -1774,24 +1781,22 @@ fn normalize_bold_italic(line: &str, reverse_emphasis: bool) -> String {
                 // Use byte-based checking for ASCII characters
                 let preceded_by_word_char = start > 0 && {
                     let prev_byte = result_bytes[start - 1];
-                    (prev_byte >= b'a' && prev_byte <= b'z')
-                        || (prev_byte >= b'A' && prev_byte <= b'Z')
-                        || (prev_byte >= b'0' && prev_byte <= b'9')
-                        || prev_byte == b'_'
+                    prev_byte.is_ascii_alphanumeric() || prev_byte == b'_'
                 };
                 let followed_by_word_char = end < result_bytes.len() && {
                     let next_byte = result_bytes[end];
-                    (next_byte >= b'a' && next_byte <= b'z')
-                        || (next_byte >= b'A' && next_byte <= b'Z')
-                        || (next_byte >= b'0' && next_byte <= b'9')
-                        || next_byte == b'_'
+                    next_byte.is_ascii_alphanumeric() || next_byte == b'_'
                 };
 
                 // Also check for adjacent underscores (part of larger pattern like __)
                 let preceded_by_underscore = start > 0 && result_bytes[start - 1] == b'_';
                 let followed_by_underscore = end < result_bytes.len() && result_bytes[end] == b'_';
 
-                if preceded_by_underscore || followed_by_underscore || preceded_by_word_char || followed_by_word_char {
+                if preceded_by_underscore
+                    || followed_by_underscore
+                    || preceded_by_word_char
+                    || followed_by_word_char
+                {
                     // Keep original (not at word boundary or part of larger pattern)
                     new_result.push_str(full_match.as_str());
                 } else {
@@ -2124,8 +2129,8 @@ fn prev_nonblank_output_line(output: &[String]) -> Option<&str> {
 }
 
 fn next_nonblank_input_line(lines: &[String], start: usize) -> Option<&str> {
-    for j in start..lines.len() {
-        let line = lines[j].as_str();
+    for line in lines.iter().skip(start) {
+        let line = line.as_str();
         if !line.trim().is_empty() {
             return Some(line);
         }
@@ -2283,13 +2288,9 @@ fn get_blockquote_prefix_preserve_markers(line: &str) -> Option<String> {
 fn blockquote_depth_and_remainder(line: &str) -> (usize, &str) {
     let mut s = line.trim_start();
     let mut depth = 0usize;
-    loop {
-        if let Some(rest) = s.strip_prefix('>') {
-            depth += 1;
-            s = rest.trim_start();
-        } else {
-            break;
-        }
+    while let Some(rest) = s.strip_prefix('>') {
+        depth += 1;
+        s = rest.trim_start();
     }
     (depth, s)
 }
@@ -2297,14 +2298,13 @@ fn blockquote_depth_and_remainder(line: &str) -> (usize, &str) {
 fn deflist_item_depth(line: &str) -> Option<usize> {
     let (depth, remainder) = blockquote_depth_and_remainder(line);
     let r = remainder.trim_start();
-    r.strip_prefix(':')
-        .and_then(|after| {
-            if after.starts_with(char::is_whitespace) {
-                Some(depth)
-            } else {
-                None
-            }
-        })
+    r.strip_prefix(':').and_then(|after| {
+        if after.starts_with(char::is_whitespace) {
+            Some(depth)
+        } else {
+            None
+        }
+    })
 }
 
 fn quote_blank_depth(line: &str) -> Option<usize> {
@@ -2317,8 +2317,7 @@ fn quote_blank_depth(line: &str) -> Option<usize> {
 }
 
 fn next_deflist_item_depth(lines: &[String], start: usize) -> Option<usize> {
-    for j in start..lines.len() {
-        let line = &lines[j];
+    for line in lines.iter().skip(start) {
         if line.trim().is_empty() {
             continue;
         }
@@ -2715,7 +2714,7 @@ fn convert_links_in_document(
             let line = lines[line_idx].clone();
             let mut line_links = links_by_line[&line_idx].clone();
             // Sort by start position, descending (right to left)
-            line_links.sort_by(|a, b| b.0.cmp(&a.0));
+            line_links.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
 
             // Build new line by replacing from right to left
             let mut new_line = line.clone();
@@ -2730,9 +2729,13 @@ fn convert_links_in_document(
                 }
                 replaced_ranges.insert(range_key);
 
-                let replacement = if link.link_type == "reference" && link.ref_id.is_some() {
+                let replacement = if link.link_type == "reference" {
                     // Preserve existing reference link
-                    format!("[{}][{}]", link.link_text, link.ref_id.as_ref().unwrap())
+                    if let Some(ref_id) = link.ref_id.as_deref() {
+                        format!("[{}][{}]", link.link_text, ref_id)
+                    } else {
+                        continue;
+                    }
                 } else if link.link_type == "implicit" && link.ref_id.is_some() {
                     // Preserve implicit reference link
                     format!("[{}]", link.link_text)
@@ -3320,15 +3323,18 @@ fn load_config() -> Option<Config> {
 }
 
 fn expand_path(path_str: &str) -> PathBuf {
-    if path_str.starts_with("~/") {
+    if let Some(stripped) = path_str.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path_str[2..]);
+            return home.join(stripped);
         }
     }
     PathBuf::from(path_str)
 }
 
-fn load_replacements(config: &Option<Config>, custom_file: &Option<String>) -> Option<Vec<Replacement>> {
+fn load_replacements(
+    config: &Option<Config>,
+    custom_file: &Option<String>,
+) -> Option<Vec<Replacement>> {
     // Determine which file to load
     let replacements_file = if let Some(custom_file) = custom_file {
         // CLI override
@@ -3381,7 +3387,10 @@ fn load_replacements(config: &Option<Config>, custom_file: &Option<String>) -> O
         if Regex::new(&replacement.pattern).is_ok() {
             valid_replacements.push(replacement);
         } else {
-            eprintln!("Warning: Invalid regex pattern in replacement '{}', skipping", replacement.name);
+            eprintln!(
+                "Warning: Invalid regex pattern in replacement '{}', skipping",
+                replacement.name
+            );
         }
     }
 
@@ -3507,7 +3516,11 @@ fn compute_replacement_regions(text: &str) -> Vec<(usize, usize, ReplacementRegi
         regions.push((start, end, kind));
 
         // Frontmatter end fence (--- or ...), but not the opening fence
-        if in_frontmatter && frontmatter_started && start > 0 && (trimmed == "---" || trimmed == "...") {
+        if in_frontmatter
+            && frontmatter_started
+            && start > 0
+            && (trimmed == "---" || trimmed == "...")
+        {
             in_frontmatter = false;
         }
 
@@ -3553,7 +3566,9 @@ fn apply_replacements_document(
         }
         // For "before" timing, process ALL replacements (single-line and multi-line) at document level
         // so they are applied before link conversion. For "after" timing, only process multi-line patterns.
-        if timing == ReplacementTiming::After && !is_multiline_replacement_pattern(&replacement.pattern) {
+        if timing == ReplacementTiming::After
+            && !is_multiline_replacement_pattern(&replacement.pattern)
+        {
             continue;
         }
 
@@ -3689,6 +3704,7 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
     skip_rules
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_file(
     filepath: &str,
     wrap_width: usize,
@@ -3895,9 +3911,7 @@ fn process_file(
                 // If this fenced code block is indented (part of a list item) and the next content
                 // is a list item, avoid forcing a blank line before the next item when compress-lists
                 // is enabled.
-                let is_indented_fence = line
-                    .trim_end_matches('\n')
-                    .starts_with(' ')
+                let is_indented_fence = line.trim_end_matches('\n').starts_with(' ')
                     || line.trim_end_matches('\n').starts_with('\t');
                 let next_is_list = next_nonblank_input_line(&lines, i + 1)
                     .map(is_list_item)
@@ -4098,39 +4112,38 @@ fn process_file(
         }
 
         // Convert setext headings to ATX headings to avoid ambiguity with horizontal rules.
-        if !skip_rules.contains(&34) && i + 1 < lines.len() {
-            if is_setext_heading(&lines[i + 1])
-                && !is_headline(&line)
-                && !is_horizontal_rule(&line)
-                && !is_code_block(&line)
-                && !is_list_item(&line)
-                && !is_blockquote(&line)
+        if !skip_rules.contains(&34)
+            && i + 1 < lines.len()
+            && is_setext_heading(&lines[i + 1])
+            && !is_headline(&line)
+            && !is_horizontal_rule(&line)
+            && !is_code_block(&line)
+            && !is_list_item(&line)
+            && !is_blockquote(&line)
+        {
+            if let Some(normalized_heading) = normalize_setext_to_atx_headings(&line, &lines[i + 1])
             {
-                if let Some(normalized_heading) =
-                    normalize_setext_to_atx_headings(&line, &lines[i + 1])
-                {
-                    // Clear list context when encountering a heading (non-list element)
-                    list_context_stack.clear();
-                    current_list_indent_unit = None;
+                // Clear list context when encountering a heading (non-list element)
+                list_context_stack.clear();
+                current_list_indent_unit = None;
 
-                    output.push(normalized_heading);
-                    changes_made = true;
+                output.push(normalized_heading);
+                changes_made = true;
 
-                    if !skip_rules.contains(&5) && i + 2 < lines.len() {
-                        let next_line = &lines[i + 2];
-                        if !next_line.trim().is_empty()
-                            && !is_headline(next_line)
-                            && !is_code_block(next_line)
-                        {
-                            output.push("\n".to_string());
-                            changes_made = true;
-                        }
+                if !skip_rules.contains(&5) && i + 2 < lines.len() {
+                    let next_line = &lines[i + 2];
+                    if !next_line.trim().is_empty()
+                        && !is_headline(next_line)
+                        && !is_code_block(next_line)
+                    {
+                        output.push("\n".to_string());
+                        changes_made = true;
                     }
-
-                    consecutive_blank_lines = 0;
-                    i += 2;
-                    continue;
                 }
+
+                consecutive_blank_lines = 0;
+                i += 2;
+                continue;
             }
         }
 
@@ -4175,17 +4188,15 @@ fn process_file(
             // If this dash rule is acting as a setext underline (because setext->ATX is skipped
             // or didn't apply), do NOT treat it like a horizontal rule for spacing purposes.
             // Otherwise we can incorrectly insert a blank line between the heading text and the underline.
-            let is_setext_underline = is_dash_horizontal_rule(&line)
-                && i > 0
-                && {
-                    let prev = &lines[i - 1];
-                    !prev.trim().is_empty()
-                        && !is_headline(prev)
-                        && !is_horizontal_rule(prev)
-                        && !is_code_block(prev)
-                        && !is_list_item(prev)
-                        && !is_blockquote(prev)
-                };
+            let is_setext_underline = is_dash_horizontal_rule(&line) && i > 0 && {
+                let prev = &lines[i - 1];
+                !prev.trim().is_empty()
+                    && !is_headline(prev)
+                    && !is_horizontal_rule(prev)
+                    && !is_code_block(prev)
+                    && !is_list_item(prev)
+                    && !is_blockquote(prev)
+            };
 
             // Optional normalization (off by default): convert `---` (or longer dash HRs) to `* * * * *`
             // Must NOT affect setext headings when setext conversion is disabled.
@@ -4387,7 +4398,7 @@ fn process_file(
                         prev_line.starts_with(' ') || prev_line.starts_with('\t');
                     if !prev_stripped.starts_with('>')
                         && !prev_stripped.starts_with('#')
-                        && !(prev_is_indented && !skip_rules.contains(&33))
+                        && (!prev_is_indented || skip_rules.contains(&33))
                     {
                         output.push("\n".to_string());
                         changes_made = true;
@@ -5060,7 +5071,7 @@ Examples:
     let reverse_emphasis = matches.get_flag("reverse-emphasis");
 
     // Handle replacements
-    let replacement_file_override = matches.get_one::<String>("replacements-file").map(|s| s.clone());
+    let replacement_file_override = matches.get_one::<String>("replacements-file").cloned();
     let replacements_enabled_cli = if matches.get_flag("no-replacements") {
         Some(false)
     } else if matches.get_flag("replacements") {
@@ -5349,10 +5360,22 @@ mod tests {
         let output = process_test_content(input);
 
         // Filenames should be preserved (not converted to emphasis)
-        assert!(output.contains("_my_file_name.md"), "Filename with underscore should be preserved");
-        assert!(output.contains("_another_file.txt"), "Filename with underscore should be preserved");
-        assert!(output.contains("my_file_name.md"), "Filename without leading underscore should be preserved");
-        assert!(output.contains("another_file.txt"), "Filename without leading underscore should be preserved");
+        assert!(
+            output.contains("_my_file_name.md"),
+            "Filename with underscore should be preserved"
+        );
+        assert!(
+            output.contains("_another_file.txt"),
+            "Filename with underscore should be preserved"
+        );
+        assert!(
+            output.contains("my_file_name.md"),
+            "Filename without leading underscore should be preserved"
+        );
+        assert!(
+            output.contains("another_file.txt"),
+            "Filename without leading underscore should be preserved"
+        );
     }
 
     #[test]
@@ -5361,9 +5384,18 @@ mod tests {
         let output = process_test_content(input);
 
         // Normal emphasis should be converted
-        assert!(output.contains("*italic*"), "Normal italic emphasis should be converted");
-        assert!(output.contains("__bold__"), "Normal bold emphasis should be preserved");
-        assert!(!output.contains("_italic_"), "Normal italic emphasis should not remain as underscore");
+        assert!(
+            output.contains("*italic*"),
+            "Normal italic emphasis should be converted"
+        );
+        assert!(
+            output.contains("__bold__"),
+            "Normal bold emphasis should be preserved"
+        );
+        assert!(
+            !output.contains("_italic_"),
+            "Normal italic emphasis should not remain as underscore"
+        );
     }
 
     #[test]
@@ -5373,17 +5405,31 @@ mod tests {
 
         // Emphasis should be converted (may have spaces due to wrapping)
         // Check that _italic_ was converted (should not appear in output)
-        assert!(!output.contains("_italic_"), "Emphasis should be converted, not remain as underscore");
+        assert!(
+            !output.contains("_italic_"),
+            "Emphasis should be converted, not remain as underscore"
+        );
         // Check that *italic* appears (may have spaces around it due to wrapping)
         assert!(
-            output.contains("*italic*") || output.contains("* italic*") || output.contains("*italic* "),
+            output.contains("*italic*")
+                || output.contains("* italic*")
+                || output.contains("*italic* "),
             "Expected *italic* pattern, got: {}",
             output
         );
-        assert!(output.contains("__bold__"), "Bold emphasis should be preserved");
+        assert!(
+            output.contains("__bold__"),
+            "Bold emphasis should be preserved"
+        );
         // Filenames should be preserved
-        assert!(output.contains("_my_file_name.md"), "Filename with single underscore should be preserved");
-        assert!(output.contains("__my_file_name.md"), "Filename with double underscore should be preserved");
+        assert!(
+            output.contains("_my_file_name.md"),
+            "Filename with single underscore should be preserved"
+        );
+        assert!(
+            output.contains("__my_file_name.md"),
+            "Filename with double underscore should be preserved"
+        );
     }
 
     #[test]
@@ -5450,7 +5496,11 @@ mod tests {
     fn test_setext_h1_converts_to_atx() {
         let input = "Heading one\n====\nParagraph text.\n";
         let output = process_test_content(input);
-        assert!(output.contains("# Heading one\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("# Heading one\n\nParagraph text.\n"),
+            "Output:\n{}",
+            output
+        );
         assert!(!output.contains("\n====\n"), "Output:\n{}", output);
     }
 
@@ -5458,7 +5508,11 @@ mod tests {
     fn test_setext_h2_converts_to_atx_even_with_three_dashes() {
         let input = "Heading two\n---\nParagraph text.\n";
         let output = process_test_content(input);
-        assert!(output.contains("## Heading two\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("## Heading two\n\nParagraph text.\n"),
+            "Output:\n{}",
+            output
+        );
         assert!(!output.contains("\n---\nParagraph"), "Output:\n{}", output);
     }
 
@@ -5466,7 +5520,11 @@ mod tests {
     fn test_horizontal_rule_without_setext_context_is_preserved() {
         let input = "---\nParagraph text.\n";
         let output = process_test_content(input);
-        assert!(output.contains("---\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("---\n\nParagraph text.\n"),
+            "Output:\n{}",
+            output
+        );
         assert!(!output.contains("## "), "Output:\n{}", output);
     }
 
@@ -5478,7 +5536,11 @@ mod tests {
         skip_rules.insert(30);
         // DO NOT skip 35: enable hr-stars
         let output = process_test_content_with_skip(input, &skip_rules);
-        assert!(output.contains("* * * * *\n\nParagraph text.\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("* * * * *\n\nParagraph text.\n"),
+            "Output:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -5487,7 +5549,7 @@ mod tests {
         let mut skip_rules = HashSet::new();
         skip_rules.insert(30); // inline-links disabled by default
         skip_rules.insert(34); // disable setext -> ATX normalization
-        // DO NOT skip 35: enable hr-stars
+                               // DO NOT skip 35: enable hr-stars
         let output = process_test_content_with_skip(input, &skip_rules);
         assert!(output.contains("Heading two"), "Output:\n{}", output);
         assert!(output.contains("\n---\n"), "Output:\n{}", output);
@@ -5517,12 +5579,12 @@ mod tests {
         skip_rules.insert(35); // hr-stars off (default), keep explicit for this test
         let output = process_test_content_with_skip(input, &skip_rules);
 
+        assert!(output.contains("Alt-H2\n------\n"), "Output:\n{}", output);
         assert!(
-            output.contains("Alt-H2\n------\n"),
+            !output.contains("Alt-H2\n\n------\n"),
             "Output:\n{}",
             output
         );
-        assert!(!output.contains("Alt-H2\n\n------\n"), "Output:\n{}", output);
         assert!(!output.contains("## Alt-H2"), "Output:\n{}", output);
     }
 
@@ -5541,7 +5603,11 @@ mod tests {
             "Output:\n{}",
             output
         );
-        assert!(output.contains("- [Another | title]"), "Output:\n{}", output);
+        assert!(
+            output.contains("- [Another | title]"),
+            "Output:\n{}",
+            output
+        );
 
         // Heuristic: table conversion produces lines starting with `|`
         assert!(!output.contains("\n| - ["), "Output:\n{}", output);
@@ -5568,12 +5634,17 @@ mod tests {
         );
 
         // Asterisk emphasis should remain asterisk emphasis at line start
-        assert!(output.contains("*This is a full-line phrase with an emphasis by surrounding asterisks.*"));
-        assert!(output.contains("*This is an emphasis* by asterisks at the beginning of a paragraph."));
+        assert!(output
+            .contains("*This is a full-line phrase with an emphasis by surrounding asterisks.*"));
+        assert!(
+            output.contains("*This is an emphasis* by asterisks at the beginning of a paragraph.")
+        );
 
         // Underscore emphasis will normalize to asterisks, but should still NOT become list items
-        assert!(output.contains("*This is a full-line phrase with an emphasis by surrounding underscores.*"));
-        assert!(output.contains("*This is an emphasis* by underscores at the beginning of a paragraph."));
+        assert!(output
+            .contains("*This is a full-line phrase with an emphasis by surrounding underscores.*"));
+        assert!(output
+            .contains("*This is an emphasis* by underscores at the beginning of a paragraph."));
     }
 
     #[test]
@@ -5669,9 +5740,17 @@ mod tests {
         let output = process_test_content(input);
 
         // No blank lines between simple consecutive list items
-        assert!(output.contains("* item 1\n* item 2\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("* item 1\n* item 2\n"),
+            "Output:\n{}",
+            output
+        );
         // Nested markers/indent will be normalized (tabs and `-` marker at level 1)
-        assert!(output.contains("\t- item 3\n\t- item 4\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("\t- item 3\n\t- item 4\n"),
+            "Output:\n{}",
+            output
+        );
 
         // Keep a blank line before the paragraph inside item 4 (but no extra blank line after)
         assert!(
@@ -5708,7 +5787,11 @@ mod tests {
         );
 
         // List items are compressed (no blank lines between items)
-        assert!(output.contains("* item 1\n* item 2\n"), "Output:\n{}", output);
+        assert!(
+            output.contains("* item 1\n* item 2\n"),
+            "Output:\n{}",
+            output
+        );
         assert!(
             output.contains("* item 2\n\t- item 3\n"),
             "Output:\n{}",
@@ -5805,22 +5888,25 @@ mod tests {
 
         // Converted link should appear in the prose line (not orphaned on its own line)
         assert!(
-            output.lines().any(|l| l.trim_end() == "This is a [link][1] in text."),
+            output
+                .lines()
+                .any(|l| l.trim_end() == "This is a [link][1] in text."),
             "Output:\n{}",
             output
         );
 
         // Reference definition should remain intact as a single line (not wrapped)
         assert!(
-            output
-                .lines()
-                .any(|l| l.contains("[1]: https://example.com/this/is/a/very/long/path/that/would/force/wrapping")),
+            output.lines().any(|l| l.contains(
+                "[1]: https://example.com/this/is/a/very/long/path/that/would/force/wrapping"
+            )),
             "Output:\n{}",
             output
         );
 
         // Original inline form should be gone
-        assert!(!output.contains("](https://example.com/this/is/a/very/long/path/that/would/force/wrapping)"));
+        assert!(!output
+            .contains("](https://example.com/this/is/a/very/long/path/that/would/force/wrapping)"));
     }
 
     #[test]
@@ -6015,16 +6101,14 @@ mod tests {
 
     #[test]
     fn test_apply_replacements_before() {
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
         let (result, changed) = apply_replacements(
             "foo bar",
             &replacements,
@@ -6038,16 +6122,14 @@ mod tests {
 
     #[test]
     fn test_apply_replacements_after() {
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::After,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::After,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
         let (result, changed) = apply_replacements(
             "foo bar",
             &replacements,
@@ -6061,16 +6143,14 @@ mod tests {
 
     #[test]
     fn test_apply_replacements_timing_mismatch() {
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
         let (result, changed) = apply_replacements(
             "foo bar",
             &replacements,
@@ -6084,16 +6164,14 @@ mod tests {
 
     #[test]
     fn test_apply_replacements_code_block_filtering() {
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
         let (result, changed) = apply_replacements(
             "foo bar",
             &replacements,
@@ -6107,16 +6185,14 @@ mod tests {
 
     #[test]
     fn test_apply_replacements_with_capture_groups() {
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: r"(\d+)\.(\d+)".to_string(),
-                replacement: "$2.$1".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: r"(\d+)\.(\d+)".to_string(),
+            replacement: "$2.$1".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
         let (result, changed) = apply_replacements(
             "Version 1.2 is released",
             &replacements,
@@ -6128,7 +6204,10 @@ mod tests {
         assert_eq!(result, "Version 2.1 is released");
     }
 
-    fn process_test_content_with_replacements(content: &str, replacements: &[Replacement]) -> String {
+    fn process_test_content_with_replacements(
+        content: &str,
+        replacements: &[Replacement],
+    ) -> String {
         let mut file = NamedTempFile::new().unwrap();
         write!(file, "{}", content).unwrap();
         file.flush().unwrap();
@@ -6138,7 +6217,17 @@ mod tests {
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
         // Use overwrite=true so the file is actually modified
-        process_file(path, 60, true, &skip_rules, false, false, false, replacements).unwrap();
+        process_file(
+            path,
+            60,
+            true,
+            &skip_rules,
+            false,
+            false,
+            false,
+            replacements,
+        )
+        .unwrap();
 
         fs::read_to_string(path).unwrap()
     }
@@ -6150,7 +6239,11 @@ mod tests {
         let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
         let replacements_file = fixtures_dir.join("replacements.yml");
 
-        assert!(replacements_file.exists(), "Replacements fixture file should exist at {:?}", replacements_file);
+        assert!(
+            replacements_file.exists(),
+            "Replacements fixture file should exist at {:?}",
+            replacements_file
+        );
 
         let content = fs::read_to_string(&replacements_file).unwrap();
         let replacements_data: ReplacementsFile = serde_yaml::from_str(&content).unwrap();
@@ -6187,16 +6280,27 @@ mod tests {
         );
 
         let md_content = fs::read_to_string(&markdown_file).unwrap();
-        let output = process_test_content_with_replacements(&md_content, &replacements_data.replacements);
+        let output =
+            process_test_content_with_replacements(&md_content, &replacements_data.replacements);
 
         // Subheads replacement should turn [b]...[/b] into a heading
-        assert!(output.contains("## Testing"), "Expected heading conversion, got: {}", output);
+        assert!(
+            output.contains("## Testing"),
+            "Expected heading conversion, got: {}",
+            output
+        );
         assert!(!output.contains("[b]"), "BBCode [b] should be removed");
         assert!(!output.contains("[/b]"), "BBCode [/b] should be removed");
 
         // Table tags should be removed if the table rule matches
-        assert!(!output.contains("[table]"), "BBCode [table] should be removed");
-        assert!(!output.contains("[/table]"), "BBCode [/table] should be removed");
+        assert!(
+            !output.contains("[table]"),
+            "BBCode [table] should be removed"
+        );
+        assert!(
+            !output.contains("[/table]"),
+            "BBCode [/table] should be removed"
+        );
     }
 
     #[test]
@@ -6215,22 +6319,24 @@ mod tests {
         let output = process_test_content_with_replacements(input, &replacements);
         assert!(!output.contains("[quote]"));
         assert!(!output.contains("[/quote]"));
-        assert!(output.contains("> First line"), "Expected quote conversion, got: {}", output);
+        assert!(
+            output.contains("> First line"),
+            "Expected quote conversion, got: {}",
+            output
+        );
     }
 
     #[test]
     fn test_replacements_fix_double_spaces() {
         // Test the "fix-double-spaces" replacement from fixtures
-        let replacements = vec![
-            Replacement {
-                name: "fix-double-spaces".to_string(),
-                pattern: "  +".to_string(),
-                replacement: " ".to_string(),
-                timing: ReplacementTiming::After,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "fix-double-spaces".to_string(),
+            pattern: "  +".to_string(),
+            replacement: " ".to_string(),
+            timing: ReplacementTiming::After,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
 
         let input = "This  has  multiple  spaces.\n";
         let output = process_test_content_with_replacements(input, &replacements);
@@ -6241,16 +6347,14 @@ mod tests {
     #[test]
     fn test_replacements_swap_version() {
         // Test the "swap-version" replacement from fixtures
-        let replacements = vec![
-            Replacement {
-                name: "swap-version".to_string(),
-                pattern: r"(\d+)\.(\d+)".to_string(),
-                replacement: "$2.$1".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "swap-version".to_string(),
+            pattern: r"(\d+)\.(\d+)".to_string(),
+            replacement: "$2.$1".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
 
         let input = "Version 1.2 is released. Version 3.4 coming soon.\n";
         let output = process_test_content_with_replacements(input, &replacements);
@@ -6261,16 +6365,14 @@ mod tests {
     #[test]
     fn test_replacements_normalize_http() {
         // Test the "normalize-http" replacement from fixtures
-        let replacements = vec![
-            Replacement {
-                name: "normalize-http".to_string(),
-                pattern: "http://".to_string(),
-                replacement: "https://".to_string(),
-                timing: ReplacementTiming::After,
-                in_code_blocks: false,
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "normalize-http".to_string(),
+            pattern: "http://".to_string(),
+            replacement: "https://".to_string(),
+            timing: ReplacementTiming::After,
+            in_code_blocks: false,
+            in_frontmatter: false,
+        }];
 
         let input = "Visit http://example.com for more info.\n";
         let output = process_test_content_with_replacements(input, &replacements);
@@ -6298,7 +6400,8 @@ mod tests {
         assert_eq!(valid_replacements.len(), 3);
 
         // Test with actual markdown content
-        let input = "Version 1.2 is available at http://example.com.  There are  double  spaces here.\n";
+        let input =
+            "Version 1.2 is available at http://example.com.  There are  double  spaces here.\n";
         let output = process_test_content_with_replacements(input, &valid_replacements);
 
         // Check that "before" replacement (swap-version) was applied
@@ -6313,16 +6416,14 @@ mod tests {
     #[test]
     fn test_replacements_respect_code_blocks() {
         // Test that replacements don't run in code blocks by default
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: false, // Should NOT run in code blocks
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: false, // Should NOT run in code blocks
+            in_frontmatter: false,
+        }];
 
         let input = "This has foo in text.\n\n```\nfoo bar\n```\n\nMore foo here.\n";
         let output = process_test_content_with_replacements(input, &replacements);
@@ -6336,16 +6437,14 @@ mod tests {
     #[test]
     fn test_replacements_in_code_blocks_when_enabled() {
         // Test that replacements run in code blocks when in_code_blocks: true
-        let replacements = vec![
-            Replacement {
-                name: "test".to_string(),
-                pattern: "foo".to_string(),
-                replacement: "bar".to_string(),
-                timing: ReplacementTiming::Before,
-                in_code_blocks: true, // SHOULD run in code blocks
-                in_frontmatter: false,
-            },
-        ];
+        let replacements = vec![Replacement {
+            name: "test".to_string(),
+            pattern: "foo".to_string(),
+            replacement: "bar".to_string(),
+            timing: ReplacementTiming::Before,
+            in_code_blocks: true, // SHOULD run in code blocks
+            in_frontmatter: false,
+        }];
 
         let input = "Text with foo.\n\n```\nfoo bar\n```\n";
         let output = process_test_content_with_replacements(input, &replacements);
@@ -6366,10 +6465,7 @@ mod tests {
             normalize_liquid_tag_spacing("{%  tag   a=b  %}\n"),
             "{% tag   a=b %}\n"
         );
-        assert_eq!(
-            normalize_liquid_tag_spacing("{%-tag-%}\n"),
-            "{%- tag -%}\n"
-        );
+        assert_eq!(normalize_liquid_tag_spacing("{%-tag-%}\n"), "{%- tag -%}\n");
     }
 
     #[test]
@@ -6382,10 +6478,7 @@ mod tests {
 
     #[test]
     fn test_normalize_ial_spacing_kramdown_trailing_space() {
-        assert_eq!(
-            normalize_ial_spacing("A {:.tip}\n"),
-            "A {: .tip }\n"
-        );
+        assert_eq!(normalize_ial_spacing("A {:.tip}\n"), "A {: .tip }\n");
         assert_eq!(
             normalize_ial_spacing("{:   #id   .class }\n"),
             "{: #id .class }\n"

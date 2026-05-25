@@ -913,6 +913,36 @@ fn is_setext_heading(line: &str) -> bool {
     Regex::new(r"^(={2,}|-{2,})\s*$").unwrap().is_match(stripped)
 }
 
+fn has_yaml_frontmatter(lines: &[String]) -> bool {
+    // Be conservative: only treat leading `---` as YAML frontmatter if
+    // - there is a closing fence (`---` or `...`) later, AND
+    // - the content between fences looks like key/value YAML (e.g., `title: Foo`)
+    //
+    // This avoids misclassifying a leading horizontal rule as frontmatter.
+    if lines.is_empty() || lines[0].trim() != "---" {
+        return false;
+    }
+
+    let mut end_idx: Option<usize> = None;
+    for (idx, line) in lines.iter().enumerate().skip(1) {
+        let t = line.trim();
+        if t == "---" || t == "..." {
+            end_idx = Some(idx);
+            break;
+        }
+    }
+    let end_idx = match end_idx {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let kv_re = Regex::new(r"^[A-Za-z0-9_-]+\s*:").unwrap();
+    lines[1..end_idx]
+        .iter()
+        .map(|l| l.trim())
+        .any(|l| kv_re.is_match(l))
+}
+
 fn normalize_setext_to_atx_headings(heading_line: &str, underline_line: &str) -> Option<String> {
     if !is_setext_heading(underline_line) {
         return None;
@@ -935,6 +965,11 @@ fn normalize_setext_to_atx_headings(heading_line: &str, underline_line: &str) ->
 fn is_horizontal_rule(line: &str) -> bool {
     let stripped = line.trim();
     Regex::new(r"^[-*_]{3,}$").unwrap().is_match(stripped)
+}
+
+fn is_dash_horizontal_rule(line: &str) -> bool {
+    let stripped = line.trim();
+    stripped.len() >= 3 && stripped.chars().all(|c| c == '-')
 }
 
 fn normalize_trailing_whitespace(line: &str) -> String {
@@ -3043,6 +3078,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 32, description: "Normalize blockquote marker chains (remove spaces between > markers)", keyword: "blockquote-markers" },
     LintingRule { num: 33, description: "Compress list item spacing (remove unnecessary blank lines between items)", keyword: "compress-lists" },
     LintingRule { num: 34, description: "Normalize setext headings to ATX headings", keyword: "setext-to-atx" },
+    LintingRule { num: 35, description: "Convert dash horizontal rules (---) to star-spaced rules (* * * * *)", keyword: "hr-stars" },
 ];
 
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
@@ -3365,6 +3401,29 @@ fn compute_replacement_regions(text: &str) -> Vec<(usize, usize, ReplacementRegi
     let mut in_code_block = false;
     let mut in_frontmatter = false;
     let mut frontmatter_started = false;
+    let mut frontmatter_enabled = false;
+
+    // Determine up-front if frontmatter should be enabled for this text
+    // (we require a closing fence and at least one key/value YAML line).
+    let mut end_found = false;
+    let mut has_kv = false;
+    let kv_re = Regex::new(r"^[A-Za-z0-9_-]+\s*:").unwrap();
+    let mut iter = text.lines();
+    if let Some(first) = iter.next() {
+        if first.trim() == "---" {
+            for line in iter {
+                let t = line.trim();
+                if !end_found && (t == "---" || t == "...") {
+                    end_found = true;
+                    break;
+                }
+                if kv_re.is_match(t) {
+                    has_kv = true;
+                }
+            }
+            frontmatter_enabled = end_found && has_kv;
+        }
+    }
 
     let mut offset: usize = 0;
 
@@ -3375,8 +3434,8 @@ fn compute_replacement_regions(text: &str) -> Vec<(usize, usize, ReplacementRegi
 
         let trimmed = line.trim_end_matches('\n').trim();
 
-        // Frontmatter start (only if it's the first line)
-        if start == 0 && trimmed == "---" {
+        // Frontmatter start (only if it's the first line and we detected valid frontmatter)
+        if frontmatter_enabled && start == 0 && trimmed == "---" {
             in_frontmatter = true;
             frontmatter_started = true;
         }
@@ -3656,7 +3715,7 @@ fn process_file(
     let valid_emoji_set = valid_emoji_names_set();
 
     // Check for YAML frontmatter at the start of the file
-    if !lines.is_empty() && lines[0].trim() == "---" {
+    if has_yaml_frontmatter(&lines) {
         in_frontmatter = true;
         frontmatter_started = true;
     }
@@ -4057,6 +4116,33 @@ fn process_file(
             // Clear list context when encountering a horizontal rule (non-list element)
             list_context_stack.clear();
             current_list_indent_unit = None;
+
+            // Optional normalization (off by default): convert `---` (or longer dash HRs) to `* * * * *`
+            // Must NOT affect setext headings when setext conversion is disabled.
+            if !skip_rules.contains(&35) && is_dash_horizontal_rule(&line) {
+                let would_be_setext_underline = if i > 0 {
+                    let prev = &lines[i - 1];
+                    !prev.trim().is_empty()
+                        && !is_headline(prev)
+                        && !is_horizontal_rule(prev)
+                        && !is_code_block(prev)
+                        && !is_list_item(prev)
+                        && !is_blockquote(prev)
+                } else {
+                    false
+                };
+
+                if !would_be_setext_underline {
+                    let line_no_nl = line.trim_end_matches('\n');
+                    let indent_len = line_no_nl.len() - line_no_nl.trim_start().len();
+                    let indent = &line_no_nl[..indent_len];
+                    let new_line = format!("{}* * * * *\n", indent);
+                    if new_line != line {
+                        line = new_line;
+                        changes_made = true;
+                    }
+                }
+            }
 
             if !skip_rules.contains(&10)
                 && !output.is_empty()
@@ -4846,6 +4932,40 @@ Examples:
         skip_rules.insert(30);
     }
 
+    // Rule 35 (hr-stars) is disabled by default unless explicitly enabled in config
+    let rule_35_explicitly_enabled = if let Some(ref cfg) = config {
+        if let Some(ref rules_config) = cfg.rules {
+            if let Some(RulesList::All) = rules_config.skip.as_ref() {
+                // If skip: all, check if hr-stars is in include list
+                if let Some(RulesList::List(ref include_list)) = rules_config.include.as_ref() {
+                    include_list
+                        .iter()
+                        .any(|item| item == "hr-stars" || item.parse::<u8>().ok() == Some(35))
+                } else {
+                    false
+                }
+            } else {
+                // If not skip: all, check if hr-stars is NOT in skip list
+                if let Some(RulesList::List(ref skip_list)) = rules_config.skip.as_ref() {
+                    !skip_list
+                        .iter()
+                        .any(|item| item == "hr-stars" || item.parse::<u8>().ok() == Some(35))
+                } else {
+                    // No skip list means rule 35 is enabled by default (but we want to disable it)
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !rule_35_explicitly_enabled {
+        skip_rules.insert(35);
+    }
+
     let skip_str = matches.get_one::<String>("skip");
     let (cli_skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
         match parse_skip_rules(skip_str) {
@@ -5060,6 +5180,8 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
+        // Rule 35 (hr-stars) is disabled by default
+        skip_rules.insert(35);
         // Use overwrite=true so the file is actually modified
         process_file(path, 60, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -5271,6 +5393,31 @@ mod tests {
         let output = process_test_content(input);
         assert!(output.contains("---\n\nParagraph text.\n"), "Output:\n{}", output);
         assert!(!output.contains("## "), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_hr_stars_converts_dash_horizontal_rules_when_enabled() {
+        let input = "---\nParagraph text.\n";
+        let mut skip_rules = HashSet::new();
+        // Keep defaults consistent with test harness: inline-links disabled
+        skip_rules.insert(30);
+        // DO NOT skip 35: enable hr-stars
+        let output = process_test_content_with_skip(input, &skip_rules);
+        assert!(output.contains("* * * * *\n\nParagraph text.\n"), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_hr_stars_does_not_convert_setext_underline_when_setext_to_atx_disabled() {
+        let input = "Heading two\n---\nParagraph text.\n";
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(30); // inline-links disabled by default
+        skip_rules.insert(34); // disable setext -> ATX normalization
+        // DO NOT skip 35: enable hr-stars
+        let output = process_test_content_with_skip(input, &skip_rules);
+        assert!(output.contains("Heading two"), "Output:\n{}", output);
+        assert!(output.contains("\n---\n"), "Output:\n{}", output);
+        assert!(!output.contains("## Heading two"), "Output:\n{}", output);
+        assert!(!output.contains("* * * * *"), "Output:\n{}", output);
     }
 
     #[test]
@@ -5504,6 +5651,8 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
+        // Rule 35 (hr-stars) is disabled by default
+        skip_rules.insert(35);
         // Use overwrite=true so the file is actually modified
         process_file(path, width, true, &skip_rules, false, false, false, &[]).unwrap();
 

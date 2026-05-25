@@ -972,6 +972,61 @@ fn is_dash_horizontal_rule(line: &str) -> bool {
     stripped.len() >= 3 && stripped.chars().all(|c| c == '-')
 }
 
+fn has_table_pipe_outside_links_and_code(line: &str) -> bool {
+    // Table detection is intentionally conservative. We only consider `|` characters
+    // that appear outside inline code spans and outside bracketed link text (`[...]`),
+    // because link titles often contain pipes (issue #4) and should not trigger table mode.
+    let line_no_nl = line.trim_end_matches('\n');
+    if !line_no_nl.contains('|') {
+        return false;
+    }
+
+    // Protect inline code spans
+    let code_span_re = Regex::new(r"`+[^`]*`+").unwrap();
+    let mut protected: Vec<(usize, usize)> = code_span_re
+        .find_iter(line_no_nl)
+        .map(|m| (m.start(), m.end()))
+        .collect();
+
+    // Protect bracketed text (e.g. link text). This is heuristic but prevents false-positive tables.
+    let mut bracket_start: Option<usize> = None;
+    let mut depth: i32 = 0;
+    for (idx, ch) in line_no_nl.char_indices() {
+        match ch {
+            '[' => {
+                depth += 1;
+                if depth == 1 {
+                    bracket_start = Some(idx);
+                }
+            }
+            ']' => {
+                if depth == 1 {
+                    if let Some(start) = bracket_start.take() {
+                        protected.push((start, idx + ch.len_utf8()));
+                    }
+                }
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    protected.sort_by_key(|r| r.0);
+    let is_protected = |pos: usize| -> bool {
+        protected.iter().any(|(s, e)| pos >= *s && pos < *e)
+    };
+
+    for (idx, ch) in line_no_nl.char_indices() {
+        if ch == '|' && !is_protected(idx) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn normalize_trailing_whitespace(line: &str) -> String {
     let has_newline = line.ends_with('\n');
     let line_no_nl = line.trim_end_matches('\n');
@@ -3999,7 +4054,7 @@ fn process_file(
 
         // Handle table normalization
         if !skip_rules.contains(&22)
-            && stripped.contains('|')
+            && has_table_pipe_outside_links_and_code(&line)
             && !is_code_block(&line)
             && !in_math_block
         {
@@ -4019,7 +4074,7 @@ fn process_file(
                     break;
                 }
 
-                if current_stripped.contains('|') {
+                if has_table_pipe_outside_links_and_code(current_line) {
                     table_lines.push(current_line.clone());
                     j += 1;
                 } else {
@@ -5469,6 +5524,28 @@ mod tests {
         );
         assert!(!output.contains("Alt-H2\n\n------\n"), "Output:\n{}", output);
         assert!(!output.contains("## Alt-H2"), "Output:\n{}", output);
+    }
+
+    #[test]
+    fn test_pipes_in_link_text_do_not_trigger_table_detection() {
+        // Regression test for issue #4: pipes inside link text should not be treated as table pipes.
+        let input = concat!(
+            "- [A title | with pipes | in it](https://example.com/a)\n",
+            "- [Another | title](https://example.com/b)\n",
+        );
+        let output = process_test_content(input);
+
+        // Should remain list items (not rewritten into a table)
+        assert!(
+            output.contains("- [A title | with pipes | in it]"),
+            "Output:\n{}",
+            output
+        );
+        assert!(output.contains("- [Another | title]"), "Output:\n{}", output);
+
+        // Heuristic: table conversion produces lines starting with `|`
+        assert!(!output.contains("\n| - ["), "Output:\n{}", output);
+        assert!(!output.contains("\n|:"), "Output:\n{}", output);
     }
 
     #[test]

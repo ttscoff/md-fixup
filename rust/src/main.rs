@@ -3203,11 +3203,81 @@ struct RulesConfig {
     include: Option<RulesList>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, PartialEq, Eq)]
 enum RulesList {
     All,
     List(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for RulesList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_yaml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
+        match value {
+            serde_yaml::Value::String(s) if s.eq_ignore_ascii_case("all") => Ok(RulesList::All),
+            serde_yaml::Value::String(s) => Ok(RulesList::List(vec![s])),
+            serde_yaml::Value::Sequence(seq) => {
+                let list = seq
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                Ok(RulesList::List(list))
+            }
+            _ => Err(serde::de::Error::custom(
+                "expected 'all' or a list of rule names/numbers",
+            )),
+        }
+    }
+}
+
+fn config_include_all(config: &Config) -> bool {
+    config
+        .rules
+        .as_ref()
+        .and_then(|r| r.include.as_ref())
+        .is_some_and(|i| matches!(i, RulesList::All))
+}
+
+fn apply_config_rule_items(items: &[String], skip_rules: &mut HashSet<u8>, skip: bool) {
+    for item in items {
+        if item == "code-block-newlines" {
+            if skip {
+                skip_rules.insert(6);
+                skip_rules.insert(7);
+            } else {
+                skip_rules.remove(&6);
+                skip_rules.remove(&7);
+            }
+        } else if item == "display-math-newlines" {
+            if skip {
+                skip_rules.insert(21);
+            } else {
+                skip_rules.remove(&21);
+            }
+        } else if item == "emphasis" {
+            if skip {
+                skip_rules.insert(25);
+            } else {
+                skip_rules.remove(&25);
+            }
+        } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str()) {
+            if skip {
+                skip_rules.insert(rule.num);
+            } else {
+                skip_rules.remove(&rule.num);
+            }
+        } else if let Ok(rule_num) = item.parse::<u8>() {
+            if LINTING_RULES.iter().any(|r| r.num == rule_num) {
+                if skip {
+                    skip_rules.insert(rule_num);
+                } else {
+                    skip_rules.remove(&rule_num);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -3284,21 +3354,14 @@ fn init_config_file(force: bool, local: bool) -> Option<PathBuf> {
         return None;
     }
 
-    // Generate config with all rules enabled
-    let all_rules: Vec<String> = LINTING_RULES
-        .iter()
-        .map(|r| r.keyword.to_string())
-        .collect();
-
     // Build YAML content manually (simpler than using serde_yaml::Value)
     let mut yaml_content = format!("width: {}\n", DEFAULT_WRAP_WIDTH);
     yaml_content.push_str("overwrite: false\n");
     yaml_content.push_str("rules:\n");
-    yaml_content.push_str("  skip: all\n");
-    yaml_content.push_str("  include:\n");
-    for rule in all_rules {
-        yaml_content.push_str(&format!("    - {}\n", rule));
-    }
+    yaml_content.push_str("  include: all\n");
+    yaml_content.push_str("  skip:\n");
+    yaml_content.push_str("    - inline-links\n");
+    yaml_content.push_str("    - hr-stars\n");
 
     fs::write(&config_file, yaml_content).ok()?;
     Some(config_file)
@@ -3628,76 +3691,29 @@ fn parse_config_rules(config: &Config) -> HashSet<u8> {
     let mut skip_rules = HashSet::new();
 
     if let Some(rules_config) = &config.rules {
-        // Handle skip: all + include: [...] pattern
-        if let Some(RulesList::All) = rules_config.skip.as_ref() {
-            // Start with all rules disabled
+        // include: all — enable every rule (including opt-in defaults), then apply skip: [...]
+        if matches!(rules_config.include.as_ref(), Some(RulesList::All)) {
+            if let Some(RulesList::List(skip_list)) = &rules_config.skip {
+                apply_config_rule_items(skip_list, &mut skip_rules, true);
+            }
+            return skip_rules;
+        }
+
+        // Legacy: skip: all + include: [...]
+        if matches!(rules_config.skip.as_ref(), Some(RulesList::All)) {
             skip_rules = LINTING_RULES.iter().map(|r| r.num).collect();
-
-            // Then include the specified rules
             if let Some(RulesList::List(include_list)) = &rules_config.include {
-                for item in include_list {
-                    if item == "code-block-newlines" {
-                        skip_rules.remove(&6);
-                        skip_rules.remove(&7);
-                    } else if item == "display-math-newlines" {
-                        skip_rules.remove(&21);
-                    } else if item == "emphasis" {
-                        skip_rules.remove(&25);
-                    } else if let Some(rule) =
-                        LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
-                    {
-                        skip_rules.remove(&rule.num);
-                    } else if let Ok(rule_num) = item.parse::<u8>() {
-                        if LINTING_RULES.iter().any(|r| r.num == rule_num) {
-                            skip_rules.remove(&rule_num);
-                        }
-                    }
-                }
+                apply_config_rule_items(include_list, &mut skip_rules, false);
             }
-        }
-        // Handle simple skip: [...] pattern
-        else if let Some(RulesList::List(skip_list)) = &rules_config.skip {
-            for item in skip_list {
-                if item == "code-block-newlines" {
-                    skip_rules.insert(6);
-                    skip_rules.insert(7);
-                } else if item == "display-math-newlines" {
-                    skip_rules.insert(21);
-                } else if item == "emphasis" {
-                    skip_rules.insert(25);
-                } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
-                {
-                    skip_rules.insert(rule.num);
-                } else if let Ok(rule_num) = item.parse::<u8>() {
-                    if LINTING_RULES.iter().any(|r| r.num == rule_num) {
-                        skip_rules.insert(rule_num);
-                    }
-                }
-            }
+            return skip_rules;
         }
 
-        // Handle include: [...] pattern (without skip: all)
+        if let Some(RulesList::List(skip_list)) = &rules_config.skip {
+            apply_config_rule_items(skip_list, &mut skip_rules, true);
+        }
+
         if let Some(RulesList::List(include_list)) = &rules_config.include {
-            if !matches!(rules_config.skip, Some(RulesList::All)) {
-                for item in include_list {
-                    if item == "code-block-newlines" {
-                        skip_rules.remove(&6);
-                        skip_rules.remove(&7);
-                    } else if item == "display-math-newlines" {
-                        skip_rules.remove(&21);
-                    } else if item == "emphasis" {
-                        skip_rules.remove(&25);
-                    } else if let Some(rule) =
-                        LINTING_RULES.iter().find(|r| r.keyword == item.as_str())
-                    {
-                        skip_rules.remove(&rule.num);
-                    } else if let Ok(rule_num) = item.parse::<u8>() {
-                        if LINTING_RULES.iter().any(|r| r.num == rule_num) {
-                            skip_rules.remove(&rule_num);
-                        }
-                    }
-                }
-            }
+            apply_config_rule_items(include_list, &mut skip_rules, false);
         }
     }
 
@@ -4982,6 +4998,8 @@ Examples:
         HashSet::new()
     };
 
+    let include_all = config.as_ref().is_some_and(config_include_all);
+
     // Rule 30 (inline-links) is disabled by default unless explicitly enabled
     // Check if rule 30 is explicitly enabled in config
     let rule_30_explicitly_enabled = if let Some(ref cfg) = config {
@@ -5014,7 +5032,7 @@ Examples:
     };
 
     // If rule 30 is not explicitly enabled, disable it by default
-    if !rule_30_explicitly_enabled {
+    if !include_all && !rule_30_explicitly_enabled {
         skip_rules.insert(30);
     }
 
@@ -5048,7 +5066,7 @@ Examples:
         false
     };
 
-    if !rule_35_explicitly_enabled {
+    if !include_all && !rule_35_explicitly_enabled {
         skip_rules.insert(35);
     }
 
@@ -6491,5 +6509,35 @@ mod tests {
             normalize_ial_spacing("`{:.tip}` and {:.tip}\n"),
             "`{:.tip}` and {: .tip }\n"
         );
+    }
+
+    #[test]
+    fn test_parse_config_rules_include_all() {
+        let yaml = "rules:\n  include: all\n  skip:\n    - wrap\n    - inline-links\n";
+        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config_include_all(&cfg));
+        let skip = parse_config_rules(&cfg);
+        assert!(skip.contains(&14)); // wrap
+        assert!(skip.contains(&30)); // inline-links
+        assert!(!skip.contains(&1)); // line-endings enabled
+        assert!(!skip.contains(&35)); // hr-stars enabled (opt-in default)
+    }
+
+    #[test]
+    fn test_parse_config_rules_include_all_no_skip() {
+        let yaml = "rules:\n  include: all\n";
+        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
+        let skip = parse_config_rules(&cfg);
+        assert!(skip.is_empty());
+    }
+
+    #[test]
+    fn test_parse_config_rules_legacy_skip_all() {
+        let yaml = "rules:\n  skip: all\n  include:\n    - wrap\n    - inline-links\n";
+        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
+        let skip = parse_config_rules(&cfg);
+        assert!(!skip.contains(&14));
+        assert!(!skip.contains(&30));
+        assert!(skip.contains(&1));
     }
 }

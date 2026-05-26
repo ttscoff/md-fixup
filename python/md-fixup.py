@@ -3311,15 +3311,12 @@ def init_config_file(force=False, local=False):
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / 'config.yml'
 
-    # Generate config with all rules enabled
-    all_rules = sorted([desc[1] for desc in LINTING_RULES.values()])
-
     config_content = {
         'width': DEFAULT_WRAP_WIDTH,
         'overwrite': False,
         'rules': {
-            'skip': 'all',
-            'include': all_rules
+            'include': 'all',
+            'skip': ['inline-links', 'hr-stars'],
         }
     }
 
@@ -3330,6 +3327,49 @@ def init_config_file(force=False, local=False):
     except Exception:
         return None
 
+def _is_rules_all(value):
+    return value == 'all'
+
+
+def _config_include_all(config):
+    rules = config.get('rules') if config else None
+    if isinstance(rules, dict):
+        return _is_rules_all(rules.get('include'))
+    return False
+
+
+def _apply_config_rule_items(items, skip_rules, skip=True):
+    """Add to or remove from skip_rules for each rule keyword/number in items."""
+    for item in items:
+        if item == 'code-block-newlines':
+            if skip:
+                skip_rules.update({6, 7})
+            else:
+                skip_rules.discard(6)
+                skip_rules.discard(7)
+        elif item == 'display-math-newlines':
+            if skip:
+                skip_rules.add(21)
+            else:
+                skip_rules.discard(21)
+        elif item == 'emphasis':
+            if skip:
+                skip_rules.add(25)
+            else:
+                skip_rules.discard(25)
+        elif item in KEYWORD_TO_RULE:
+            if skip:
+                skip_rules.add(KEYWORD_TO_RULE[item])
+            else:
+                skip_rules.discard(KEYWORD_TO_RULE[item])
+        elif item.isdigit() and int(item) in LINTING_RULES:
+            rule_num = int(item)
+            if skip:
+                skip_rules.add(rule_num)
+            else:
+                skip_rules.discard(rule_num)
+
+
 def _parse_config_rules(config):
     """Parse rules section from config dict
 
@@ -3337,67 +3377,35 @@ def _parse_config_rules(config):
         set of rule numbers to skip
     """
     result = set()
-    if 'rules' in config and isinstance(config['rules'], dict):
-        rules_config = config['rules']
+    if 'rules' not in config or not isinstance(config['rules'], dict):
+        return result
 
-        # Handle skip: all + include: [...] pattern
-        if rules_config.get('skip') == 'all':
-            # Start with all rules disabled
-            all_rule_nums = set(LINTING_RULES.keys())
-            result = all_rule_nums.copy()
+    rules_config = config['rules']
+    include = rules_config.get('include')
+    skip = rules_config.get('skip')
 
-            # Then include the specified rules
-            if 'include' in rules_config:
-                include_list = rules_config['include']
-                if not isinstance(include_list, list):
-                    include_list = [include_list]
+    # include: all — enable every rule, then apply skip: [...]
+    if _is_rules_all(include):
+        if skip and not _is_rules_all(skip):
+            skip_list = skip if isinstance(skip, list) else [skip]
+            _apply_config_rule_items(skip_list, result, skip=True)
+        return result
 
-                for item in include_list:
-                    # Handle group keywords
-                    if item == 'code-block-newlines':
-                        result.discard(6)
-                        result.discard(7)
-                    elif item == 'display-math-newlines':
-                        result.discard(21)
-                    elif item in KEYWORD_TO_RULE:
-                        result.discard(KEYWORD_TO_RULE[item])
-                    elif item.isdigit() and int(item) in LINTING_RULES:
-                        result.discard(int(item))
+    # Legacy: skip: all + include: [...]
+    if _is_rules_all(skip):
+        result = set(LINTING_RULES.keys())
+        if include:
+            include_list = include if isinstance(include, list) else [include]
+            _apply_config_rule_items(include_list, result, skip=False)
+        return result
 
-        # Handle simple skip: [...] pattern
-        elif 'skip' in rules_config:
-            skip_list = rules_config['skip']
-            if not isinstance(skip_list, list):
-                skip_list = [skip_list]
+    if skip:
+        skip_list = skip if isinstance(skip, list) else [skip]
+        _apply_config_rule_items(skip_list, result, skip=True)
 
-            for item in skip_list:
-                # Handle group keywords
-                if item == 'code-block-newlines':
-                    result.update({6, 7})
-                elif item == 'display-math-newlines':
-                    result.add(21)
-                elif item in KEYWORD_TO_RULE:
-                    result.add(KEYWORD_TO_RULE[item])
-                elif item.isdigit() and int(item) in LINTING_RULES:
-                    result.add(int(item))
-
-        # Handle include: [...] pattern (without skip: all)
-        if 'include' in rules_config and rules_config.get('skip') != 'all':
-            include_list = rules_config['include']
-            if not isinstance(include_list, list):
-                include_list = [include_list]
-
-            for item in include_list:
-                # Handle group keywords
-                if item == 'code-block-newlines':
-                    result.discard(6)
-                    result.discard(7)
-                elif item == 'display-math-newlines':
-                    result.discard(21)
-                elif item in KEYWORD_TO_RULE:
-                    result.discard(KEYWORD_TO_RULE[item])
-                elif item.isdigit() and int(item) in LINTING_RULES:
-                    result.discard(int(item))
+    if include and not _is_rules_all(include):
+        include_list = include if isinstance(include, list) else [include]
+        _apply_config_rule_items(include_list, result, skip=False)
 
     return result
 
@@ -3423,6 +3431,8 @@ def load_config():
                     'width': config.get('width'),
                     'overwrite': config.get('overwrite'),
                     'skip_rules': _parse_config_rules(config),
+                    'include_all': _config_include_all(config),
+                    'rules': config.get('rules'),
                 }
         except Exception:
             pass  # Fall through to global config
@@ -3444,6 +3454,8 @@ def load_config():
             'width': config.get('width'),
             'overwrite': config.get('overwrite'),
             'skip_rules': _parse_config_rules(config),
+            'include_all': _config_include_all(config),
+            'rules': config.get('rules'),
         }
     except Exception as e:
         # Silently ignore config file errors
@@ -3586,16 +3598,18 @@ Examples:
 
     # Start with config skip_rules, then merge CLI skip rules
     # Rule 30 (inline-links) is disabled by default unless explicitly enabled
-    skip_rules = config['skip_rules'].copy() if config and config.get('skip_rules') else set()
-    # If no config or rule 30 not explicitly enabled, disable it by default
-    if not config or 30 not in (config.get('skip_rules') or set()):
-        # Check if rule 30 is in the include list (if using skip: all pattern)
-        if config and config.get('rules', {}).get('skip') == 'all':
-            include_list = config.get('rules', {}).get('include', [])
+    skip_rules = config['skip_rules'].copy() if config and config.get('skip_rules') is not None else set()
+    include_all = config and config.get('include_all')
+    if not include_all:
+        if not config:
+            skip_rules.add(30)
+        elif isinstance(config.get('rules'), dict) and _is_rules_all(config['rules'].get('skip')):
+            include_list = config['rules'].get('include', [])
+            if not isinstance(include_list, list):
+                include_list = [include_list]
             if 'inline-links' not in include_list and 30 not in include_list:
-                skip_rules.add(30)  # Disable inline-links by default
-        elif not config:
-            # No config file - disable inline-links by default
+                skip_rules.add(30)
+        elif 30 not in skip_rules:
             skip_rules.add(30)
 
     # Parse skip rules from CLI (accepts both numbers and keywords)

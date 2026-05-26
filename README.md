@@ -174,30 +174,41 @@ You can create a configuration file to set default options. The config file is l
 
 ### Initializing the Config File
 
-To create an initial config file with all rules enabled by name, use:
+To create an initial config file with all rules enabled, use:
 
 ```bash
 md-fixup --init-config
 ```
 
-This creates `~/.config/md-fixup/config.yml` with all rules listed, making it easy to edit and disable specific rules.
+This creates `~/.config/md-fixup/config.yml` using the recommended `include: all` pattern, with `inline-links` and `hr-stars` in the `skip` list (those rules are off by default at the CLI as well). Remove entries from `skip` to turn rules on, or add keywords to `skip` to turn rules off.
 
 **Note:** If no config file exists and you run `md-fixup` interactively (from a terminal), it will automatically create the initial config file for you. This only happens when running interactively to avoid creating files during background/automated runs.
 
-The configuration file is a YAML file with the following structure:
+### Rule selection in config
+
+The `rules` section supports three patterns:
+
+| Pattern | YAML | Effect |
+| --- | --- | --- |
+| Enable all, then opt out | `include: all` plus optional `skip: [list]` | Every rule runs, including opt-in defaults (`inline-links`, `hr-stars`), except those listed under `skip`. |
+| Skip only | `skip: [list]` (no `include`) | Listed rules are off; opt-in defaults stay off unless you enable them explicitly. |
+| Legacy allowlist | `skip: all` plus `include: [list]` | Everything off first; only listed rules run. Still supported for existing configs. |
+
+Recommended starting point:
 
 ```yaml
 width: 60
 overwrite: false
 rules:
-  skip: all
-  include:
-    - line-endings
-    - blank-lines
-    - setext-to-atx
+  include: all
+  skip:
+    - inline-links
+    - wrap
 ```
 
-Or to skip specific rules:
+`include: all` is the straightforward way to turn on every built-in rule, then use `skip` for exceptions. Rules listed under `skip` are not run; there is no separate `include` list in this mode.
+
+Skip specific rules without enabling opt-in defaults:
 
 ```yaml
 width: 80
@@ -210,10 +221,22 @@ rules:
     - setext-to-atx
 ```
 
+Legacy allowlist (everything disabled until named in `include`):
+
+```yaml
+rules:
+  skip: all
+  include:
+    - line-endings
+    - blank-lines
+    - setext-to-atx
+```
+
+If the same rule appears in both `skip` and `include` under the legacy pattern, `include` wins and the rule runs. With `include: all`, only `skip` is consulted.
+
 **Configuration merging:**
 - Command-line arguments always override config file settings
 - Rules specified in `--skip` are merged with config file rules (CLI takes precedence)
-- The `skip: all` pattern starts with all rules disabled, then includes only the specified rules
 - Group keywords (`code-block-newlines`, `display-math-newlines`) work in config files
 
 ### Custom regex replacements

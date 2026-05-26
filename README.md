@@ -114,6 +114,9 @@ md-fixup --width 72 file1.md file2.md *.md
 md-fixup --skip 2,3 file.md
 md-fixup --skip wrap,end-newline file.md
 
+# Enable specific rules (opposite of --skip; useful with config skip: all)
+md-fixup --include wrap,line-endings file.md
+
 # Process all .md files in current directory (if no files specified)
 md-fixup
 
@@ -154,17 +157,19 @@ Rules can be skipped using either their number or keyword:
 - `27` / `list-reset` - Reset ordered lists to start at 1 (if disabled, preserves starting number)
 - `28` / `reference-links` - Convert links to numeric reference links
 - `29` / `links-at-end` - Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)
-- `30` / `inline-links` - Convert links to inline format (overrides reference-links if enabled)
+- `30` / `inline-links` - Convert links to inline format (overrides reference-links if enabled; off by default)
 - `31` / `liquid-tags` - Normalize Liquid tag spacing
 - `32` / `blockquote-markers` - Normalize blockquote marker chains (remove spaces between `>` markers)
 - `33` / `compress-lists` - Compress list spacing by removing unnecessary blank lines between list items
 - `34` / `setext-to-atx` - Normalize setext headings (`===` / `---`) to ATX headings (`#` / `##`)
-- `35` / `hr-stars` - Convert dash-only horizontal rules to star-spaced rules (`* * * * *`) (off by default)
+- `35` / `hr-stars` - Convert dash-only horizontal rules to star-spaced rules (`* * * * *`)
 
 Group keywords (expand to multiple rules):
 
-- `code-block-newlines` - Skip all code block newline rules (equivalent to skipping `6` and `7`)
-- `display-math-newlines` - Skip display math newline handling (equivalent to skipping `21`)
+- `code-block-newlines` - Skip or enable all code block newline rules (equivalent to rules `6` and `7`)
+- `display-math-newlines` - Skip or enable display math newline handling (equivalent to rule `21`)
+
+Use `--skip` to turn rules off and `--include` to turn rules on (removes them from the skip set). With a config that uses `skip: all`, `--include wrap,line-endings` enables only those rules for that run.
 
 ## Configuration File
 
@@ -180,7 +185,7 @@ To create an initial config file with all rules enabled, use:
 md-fixup --init-config
 ```
 
-This creates `~/.config/md-fixup/config.yml` using the recommended `include: all` pattern, with `inline-links` and `hr-stars` in the `skip` list (those rules are off by default at the CLI as well). Remove entries from `skip` to turn rules on, or add keywords to `skip` to turn rules off.
+This creates `~/.config/md-fixup/config.yml` using the recommended `include: all` pattern, with `inline-links` in the `skip` list (`inline-links` is also off by default when no config is present). Remove entries from `skip` to turn rules on, or add keywords to `skip` to turn rules off.
 
 **Note:** If no config file exists and you run `md-fixup` interactively (from a terminal), it will automatically create the initial config file for you. This only happens when running interactively to avoid creating files during background/automated runs.
 
@@ -190,9 +195,9 @@ The `rules` section supports three patterns:
 
 | Pattern | YAML | Effect |
 | --- | --- | --- |
-| Enable all, then opt out | `include: all` plus optional `skip: [list]` | Every rule runs, including opt-in defaults (`inline-links`, `hr-stars`), except those listed under `skip`. |
-| Skip only | `skip: [list]` (no `include`) | Listed rules are off; opt-in defaults stay off unless you enable them explicitly. |
-| Legacy allowlist | `skip: all` plus `include: [list]` | Everything off first; only listed rules run. Still supported for existing configs. |
+| Enable all, then opt out | `include: all` plus optional `skip: [list]` | Every rule runs, including `inline-links`, except those listed under `skip`. |
+| Skip only | `skip: [list]` (no `include`) | Listed rules are off; `inline-links` stays off unless enabled explicitly. |
+| Legacy allowlist | `skip: all` plus `include: [list]` | Everything off first; only listed rules run. Still supported for existing configs. Pair with CLI `--include` to enable rules per invocation. |
 
 Recommended starting point:
 
@@ -236,8 +241,8 @@ If the same rule appears in both `skip` and `include` under the legacy pattern, 
 
 **Configuration merging:**
 - Command-line arguments always override config file settings
-- Rules specified in `--skip` are merged with config file rules (CLI takes precedence)
-- Group keywords (`code-block-newlines`, `display-math-newlines`) work in config files
+- Rules specified in `--skip` are added to the skip set; `--include` removes rules from the skip set (applied after `--skip`)
+- Group keywords (`code-block-newlines`, `display-math-newlines`) work in config files and on the CLI
 
 ### Custom regex replacements
 

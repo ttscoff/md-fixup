@@ -3139,27 +3139,54 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 35, description: "Convert dash horizontal rules (---) to star-spaced rules (* * * * *)", keyword: "hr-stars" },
 ];
 
+fn apply_cli_rule_item(value: &str, rules: &mut HashSet<u8>) -> Result<(), String> {
+    if value == "code-block-newlines" {
+        rules.insert(6);
+        rules.insert(7);
+    } else if value == "display-math-newlines" {
+        rules.insert(21);
+    } else if let Ok(rule_num) = value.parse::<u8>() {
+        if LINTING_RULES.iter().any(|r| r.num == rule_num) {
+            rules.insert(rule_num);
+        } else {
+            return Err(format!("Invalid rule number: {}", rule_num));
+        }
+    } else if value == "emphasis" {
+        rules.insert(25);
+    } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == value) {
+        rules.insert(rule.num);
+    } else {
+        return Err(format!("Invalid keyword: {}", value));
+    }
+    Ok(())
+}
+
+fn parse_rule_list(list_str: &str) -> Result<HashSet<u8>, String> {
+    let mut rules = HashSet::new();
+    for value in list_str.split(',').map(|s| s.trim()) {
+        if value.is_empty() {
+            continue;
+        }
+        if value == "em-dash" || value == "guillemet" {
+            return Err(format!(
+                "'{}' is only valid with --skip (typography sub-keywords)",
+                value
+            ));
+        }
+        apply_cli_rule_item(value, &mut rules)?;
+    }
+    Ok(rules)
+}
+
 fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String> {
     let mut skip_rules = HashSet::new();
     let mut skip_em_dash = false;
     let mut skip_guillemet = false;
 
-    let values: Vec<&str> = skip_str.split(',').map(|s| s.trim()).collect();
-
-    for value in values {
-        // Group keywords that map to multiple underlying rules
-        if value == "code-block-newlines" {
-            // Skip both before/after code block rules
-            skip_rules.insert(6);
-            skip_rules.insert(7);
+    for value in skip_str.split(',').map(|s| s.trim()) {
+        if value.is_empty() {
             continue;
         }
-        if value == "display-math-newlines" {
-            // Skip display math block spacing and surrounding newlines
-            skip_rules.insert(21);
-            continue;
-        }
-
         if value == "em-dash" {
             skip_em_dash = true;
             continue;
@@ -3168,21 +3195,7 @@ fn parse_skip_rules(skip_str: &str) -> Result<(HashSet<u8>, bool, bool), String>
             skip_guillemet = true;
             continue;
         }
-
-        if let Ok(rule_num) = value.parse::<u8>() {
-            if LINTING_RULES.iter().any(|r| r.num == rule_num) {
-                skip_rules.insert(rule_num);
-            } else {
-                return Err(format!("Invalid rule number: {}", rule_num));
-            }
-        } else if value == "emphasis" {
-            // Alias for bold-italic (rule 25)
-            skip_rules.insert(25);
-        } else if let Some(rule) = LINTING_RULES.iter().find(|r| r.keyword == value) {
-            skip_rules.insert(rule.num);
-        } else {
-            return Err(format!("Invalid keyword: {}", value));
-        }
+        apply_cli_rule_item(value, &mut skip_rules)?;
     }
 
     Ok((skip_rules, skip_em_dash, skip_guillemet))
@@ -3214,7 +3227,8 @@ impl<'de> Deserialize<'de> for RulesList {
     where
         D: serde::Deserializer<'de>,
     {
-        let value = serde_yaml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
+        let value =
+            serde_yaml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
         match value {
             serde_yaml::Value::String(s) if s.eq_ignore_ascii_case("all") => Ok(RulesList::All),
             serde_yaml::Value::String(s) => Ok(RulesList::List(vec![s])),
@@ -3361,7 +3375,6 @@ fn init_config_file(force: bool, local: bool) -> Option<PathBuf> {
     yaml_content.push_str("  include: all\n");
     yaml_content.push_str("  skip:\n");
     yaml_content.push_str("    - inline-links\n");
-    yaml_content.push_str("    - hr-stars\n");
 
     fs::write(&config_file, yaml_content).ok()?;
     Some(config_file)
@@ -4805,6 +4818,12 @@ fn main() {
                 .help("Comma-separated list of rule numbers or keywords to skip")
         )
         .arg(
+            Arg::new("include")
+                .long("include")
+                .value_name("X[,X]")
+                .help("Comma-separated list of rule numbers or keywords to enable (removes them from the skip set; useful with config skip: all)")
+        )
+        .arg(
             Arg::new("init-config")
                 .long("init-config")
                 .help("Initialize the global config file with all rules enabled by name")
@@ -4847,16 +4866,16 @@ fn main() {
         )
         .after_help(format!(
             "\
-Available linting rules (use with --skip):
+Available linting rules (use with --skip or --include):
 {}
 
 Group keywords (expand to multiple rules):
-  - code-block-newlines: Skip all code block newline rules (6,7)
-  - display-math-newlines: Skip display math newline handling (21)
+  - code-block-newlines: Skip/enable all code block newline rules (6,7)
+  - display-math-newlines: Skip/enable display math newline handling (21)
 
 Sub-keywords (for specific rule features):
-  - em-dash: Skip em dash conversion (use with typography rule)
-  - guillemet: Skip guillemet conversion (use with typography rule)
+  - em-dash: Skip em dash conversion (use with --skip and typography rule)
+  - guillemet: Skip guillemet conversion (use with --skip and typography rule)
 
 Examples:
   md-fixup file.md
@@ -4866,6 +4885,7 @@ Examples:
   md-fixup  # Processes all .md files in current directory
   md-fixup --skip 2,3 file.md  # Skip trailing whitespace and blank line collapse
   md-fixup --skip wrap,end-newline file.md  # Skip wrapping and end newline (using keywords)
+  md-fixup --include wrap,line-endings file.md  # Enable specific rules (e.g. with config skip: all)
   md-fixup --init-config  # Create initial global config file with all rules enabled
 ",
             rules_list
@@ -5036,40 +5056,6 @@ Examples:
         skip_rules.insert(30);
     }
 
-    // Rule 35 (hr-stars) is disabled by default unless explicitly enabled in config
-    let rule_35_explicitly_enabled = if let Some(ref cfg) = config {
-        if let Some(ref rules_config) = cfg.rules {
-            if let Some(RulesList::All) = rules_config.skip.as_ref() {
-                // If skip: all, check if hr-stars is in include list
-                if let Some(RulesList::List(ref include_list)) = rules_config.include.as_ref() {
-                    include_list
-                        .iter()
-                        .any(|item| item == "hr-stars" || item.parse::<u8>().ok() == Some(35))
-                } else {
-                    false
-                }
-            } else {
-                // If not skip: all, check if hr-stars is NOT in skip list
-                if let Some(RulesList::List(ref skip_list)) = rules_config.skip.as_ref() {
-                    !skip_list
-                        .iter()
-                        .any(|item| item == "hr-stars" || item.parse::<u8>().ok() == Some(35))
-                } else {
-                    // No skip list means rule 35 is enabled by default (but we want to disable it)
-                    false
-                }
-            }
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    if !include_all && !rule_35_explicitly_enabled {
-        skip_rules.insert(35);
-    }
-
     let skip_str = matches.get_one::<String>("skip");
     let (cli_skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
         match parse_skip_rules(skip_str) {
@@ -5085,6 +5071,20 @@ Examples:
 
     // Merge CLI skip rules into config skip rules (CLI overrides config)
     skip_rules.extend(cli_skip_rules);
+
+    if let Some(include_str) = matches.get_one::<String>("include") {
+        match parse_rule_list(include_str) {
+            Ok(include_rules) => {
+                for rule_num in include_rules {
+                    skip_rules.remove(&rule_num);
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     let reverse_emphasis = matches.get_flag("reverse-emphasis");
 
@@ -5284,8 +5284,6 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
-        // Rule 35 (hr-stars) is disabled by default
-        skip_rules.insert(35);
         // Use overwrite=true so the file is actually modified
         process_file(path, 60, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -5537,7 +5535,10 @@ mod tests {
     #[test]
     fn test_horizontal_rule_without_setext_context_is_preserved() {
         let input = "---\nParagraph text.\n";
-        let output = process_test_content(input);
+        let mut skip_rules = HashSet::new();
+        skip_rules.insert(30);
+        skip_rules.insert(35); // hr-stars off: preserve dash HR for spacing tests
+        let output = process_test_content_with_skip(input, &skip_rules);
         assert!(
             output.contains("---\n\nParagraph text.\n"),
             "Output:\n{}",
@@ -5550,9 +5551,7 @@ mod tests {
     fn test_hr_stars_converts_dash_horizontal_rules_when_enabled() {
         let input = "---\nParagraph text.\n";
         let mut skip_rules = HashSet::new();
-        // Keep defaults consistent with test harness: inline-links disabled
-        skip_rules.insert(30);
-        // DO NOT skip 35: enable hr-stars
+        skip_rules.insert(30); // inline-links disabled by default in tests
         let output = process_test_content_with_skip(input, &skip_rules);
         assert!(
             output.contains("* * * * *\n\nParagraph text.\n"),
@@ -5567,7 +5566,6 @@ mod tests {
         let mut skip_rules = HashSet::new();
         skip_rules.insert(30); // inline-links disabled by default
         skip_rules.insert(34); // disable setext -> ATX normalization
-                               // DO NOT skip 35: enable hr-stars
         let output = process_test_content_with_skip(input, &skip_rules);
         assert!(output.contains("Heading two"), "Output:\n{}", output);
         assert!(output.contains("\n---\n"), "Output:\n{}", output);
@@ -5868,8 +5866,6 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
-        // Rule 35 (hr-stars) is disabled by default
-        skip_rules.insert(35);
         // Use overwrite=true so the file is actually modified
         process_file(path, width, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -6520,7 +6516,14 @@ mod tests {
         assert!(skip.contains(&14)); // wrap
         assert!(skip.contains(&30)); // inline-links
         assert!(!skip.contains(&1)); // line-endings enabled
-        assert!(!skip.contains(&35)); // hr-stars enabled (opt-in default)
+        assert!(!skip.contains(&35)); // hr-stars enabled with include: all
+    }
+
+    #[test]
+    fn test_parse_rule_list_include_cli() {
+        let rules = parse_rule_list("wrap,inline-links").unwrap();
+        assert!(rules.contains(&14));
+        assert!(rules.contains(&30));
     }
 
     #[test]

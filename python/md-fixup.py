@@ -3316,7 +3316,7 @@ def init_config_file(force=False, local=False):
         'overwrite': False,
         'rules': {
             'include': 'all',
-            'skip': ['inline-links', 'hr-stars'],
+            'skip': ['inline-links'],
         }
     }
 
@@ -3326,6 +3326,29 @@ def init_config_file(force=False, local=False):
         return config_file
     except Exception:
         return None
+
+def _parse_rule_list(list_str):
+    """Parse a comma-separated list of rule numbers/keywords into a set of rule numbers."""
+    rules = set()
+    for value in (v.strip() for v in list_str.split(',')):
+        if not value:
+            continue
+        if value in ('em-dash', 'guillemet'):
+            raise ValueError(f"'{value}' is only valid with --skip (typography sub-keywords)")
+        if value == 'code-block-newlines':
+            rules.update({6, 7})
+        elif value == 'display-math-newlines':
+            rules.add(21)
+        elif value == 'emphasis':
+            rules.add(25)
+        elif value in KEYWORD_TO_RULE:
+            rules.add(KEYWORD_TO_RULE[value])
+        elif value.isdigit() and int(value) in LINTING_RULES:
+            rules.add(int(value))
+        else:
+            raise ValueError(f"Invalid keyword: {value}")
+    return rules
+
 
 def _is_rules_all(value):
     return value == 'all'
@@ -3483,6 +3506,7 @@ Examples:
   %(prog)s  # Processes all .md files in current directory
   %(prog)s --skip 2,3 file.md  # Skip trailing whitespace and blank line collapse
   %(prog)s --skip wrap,end-newline file.md  # Skip wrapping and end newline (using keywords)
+  %(prog)s --include wrap,line-endings file.md  # Enable specific rules (e.g. with config skip: all)
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -3508,6 +3532,12 @@ Examples:
         type=str,
         metavar='X[,X]',
         help='Comma-separated list of rule numbers or keywords to skip (e.g., --skip 2,3 or --skip wrap,end-newline). See available rules below.'
+    )
+    parser.add_argument(
+        '--include',
+        type=str,
+        metavar='X[,X]',
+        help='Comma-separated list of rule numbers or keywords to enable (removes them from the skip set; useful with config skip: all)'
     )
     parser.add_argument(
         '--init-config',
@@ -3618,41 +3648,21 @@ Examples:
     if args.skip:
         skip_values = [x.strip() for x in args.skip.split(',')]
         for value in skip_values:
-            # Group keywords that map to multiple underlying rules
-            if value == 'code-block-newlines':
-                # Skip both before/after code block rules
-                skip_rules.update({6, 7})
-                continue
-            if value == 'display-math-newlines':
-                # Skip display math block spacing and surrounding newlines
-                skip_rules.add(21)
-                continue
-
-            # Check for sub-keywords first (these don't map directly to rule numbers)
             if value in ('em-dash', 'guillemet'):
-                # These are handled separately in process_file via skip_string
                 continue
+        try:
+            skip_rules.update(_parse_rule_list(args.skip))
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
-            # Try to parse as number first
-            try:
-                rule_num = int(value)
-                if rule_num not in LINTING_RULES:
-                    print(f"Error: Invalid rule number: {rule_num}", file=sys.stderr)
-                    print(f"Valid rule numbers are: {sorted(LINTING_RULES.keys())}", file=sys.stderr)
-                    sys.exit(1)
-                skip_rules.add(rule_num)
-            except ValueError:
-                # Not a number, treat as keyword
-                if value in KEYWORD_TO_RULE:
-                    skip_rules.add(KEYWORD_TO_RULE[value])
-                else:
-                    print(f"Error: Invalid keyword: {value}", file=sys.stderr)
-                    valid_keywords = ', '.join(
-                        sorted(KEYWORD_TO_RULE.keys())
-                        + ['em-dash', 'guillemet', 'code-block-newlines', 'display-math-newlines', 'emphasis']
-                    )
-                    print(f"Valid keywords are: {valid_keywords}", file=sys.stderr)
-                    sys.exit(1)
+    if args.include:
+        try:
+            for rule_num in _parse_rule_list(args.include):
+                skip_rules.discard(rule_num)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     # If no files provided as arguments, check STDIN
     if not files and not sys.stdin.isatty():

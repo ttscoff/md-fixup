@@ -6,7 +6,7 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 35 different normalization and formatting rules:
+md-fixup performs 36 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
@@ -43,6 +43,7 @@ md-fixup performs 35 different normalization and formatting rules:
 33. Compresses list spacing by removing unnecessary blank lines between list items (bulleted and numbered)
 34. Normalizes setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 35. Converts dash-only horizontal rules (`---` or longer) to star-spaced rules (`* * * * *`) (off by default)
+36. Rewraps hard-wrapped paragraphs to the configured width (enabled with wrap; skips lists, tables, and code blocks)
 
 **Definition lists:** md-fixup compresses definition lists by removing blank lines before and between consecutive definition items (`:\s+`). This also works inside blockquotes (removing quote-only blank lines like `>` between definition items). This behavior is part of rule `3` (`blank-lines`).
 
@@ -163,6 +164,7 @@ Rules can be skipped using either their number or keyword:
 - `33` / `compress-lists` - Compress list spacing by removing unnecessary blank lines between list items
 - `34` / `setext-to-atx` - Normalize setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 - `35` / `hr-stars` - Convert dash-only horizontal rules to star-spaced rules (`* * * * *`)
+- `36` / `rewrap` - Rewrap hard-wrapped paragraphs to the configured width (on by default when `wrap` is enabled; use `--skip rewrap` to only wrap lines longer than the width)
 
 Group keywords (expand to multiple rules):
 

@@ -15,6 +15,7 @@ Markdown linter that:
 12. Converts list indentation spaces to tabs consistently
 13. Normalizes list marker spacing
 14. Wraps text at specified width (preserving links, code spans, fenced blocks)
+36. Rewraps hard-wrapped paragraphs to the configured width (enabled with wrap)
 15. Ensures exactly one blank line at end of file
 16. Normalizes IAL (Inline Attribute List) spacing for both Kramdown and Pandoc styles
 17. Normalizes fenced code block language identifier spacing
@@ -1861,11 +1862,16 @@ def is_blockquote(line):
     return stripped.startswith('>')
 
 def get_blockquote_prefix(line):
-    """Get the blockquote prefix (including spaces)"""
+    """Get the blockquote prefix (leading indent and > markers)."""
     match = re.match(r'^(\s*)', line)
-    spaces = match.group(1) if match else ''
-    if line.lstrip().startswith('>'):
-        return spaces + '>'
+    indent = match.group(1) if match else ''
+    s = line[len(indent):].lstrip()
+    depth = 0
+    while s.startswith('>'):
+        depth += 1
+        s = s[1:].lstrip()
+    if depth:
+        return indent + '>' * depth
     return ''
 
 def should_preserve_line(line):
@@ -1883,6 +1889,9 @@ def should_preserve_line(line):
     # Reference-style link definitions should never be wrapped
     # e.g. [1]: https://example.com "Title"
     if re.match(r'^\[[^\]]+\]\s*:\s*\S+', stripped):
+        return True
+    # Tables should not be wrapped
+    if '|' in stripped:
         return True
     # Note: blank lines are NOT preserved here - they go through blank line compression
     return False
@@ -2024,6 +2033,162 @@ def wrap_text(text, width, prefix=''):
 
     return lines if lines else [full_first_line]
 
+def has_hard_line_break(line):
+    """True if the line ends with a markdown hard line break (two spaces or backslash)."""
+    line_no_nl = line.rstrip('\n')
+    if line_no_nl.endswith('  '):
+        return True
+    stripped = line_no_nl.rstrip()
+    return stripped.endswith('\\')
+
+def blockquote_depth(line):
+    """Return blockquote nesting depth (number of > markers)."""
+    depth = 0
+    s = line.lstrip()
+    while s.startswith('>'):
+        depth += 1
+        s = s[1:].lstrip()
+    return depth
+
+def blockquote_content(line):
+    """Return text content after blockquote markers."""
+    s = line.lstrip()
+    while s.startswith('>'):
+        s = s[1:].lstrip()
+    return s
+
+def is_list_continuation_line(line, lines, idx):
+    """True if line continues a list item (indented content after a list marker)."""
+    if not line.strip() or is_list_item(line) or is_blockquote(line):
+        return False
+    line_indent = len(line) - len(line.lstrip())
+    if line_indent == 0:
+        return False
+    j = idx - 1
+    while j >= 0:
+        if not lines[j].strip():
+            return False
+        prev = lines[j]
+        if is_list_item(prev):
+            base_indent = len(prev) - len(prev.lstrip())
+            return line_indent > base_indent
+        prev_indent = len(prev) - len(prev.lstrip())
+        if prev_indent > 0 and line_indent >= prev_indent:
+            j -= 1
+            continue
+        return False
+    return False
+
+def is_rewrapable_paragraph_line(line, lines, idx):
+    """True if line can be part of a rewrapped paragraph segment."""
+    if not line.strip():
+        return False
+    if should_preserve_line(line) or is_list_item(line) or is_blockquote(line):
+        return False
+    if is_headline(line) or is_horizontal_rule(line):
+        return False
+    if is_list_continuation_line(line, lines, idx):
+        return False
+    return True
+
+def quote_blank_depth(line):
+    """Depth of a quote-only line (e.g. `>` with no content), or None."""
+    depth = blockquote_depth(line)
+    if depth > 0 and not blockquote_content(line).strip():
+        return depth
+    return None
+
+def deflist_item_depth(line):
+    """Nesting depth of a definition-list item (`: term`), or None."""
+    if is_blockquote(line):
+        content = blockquote_content(line).lstrip()
+    else:
+        content = line.lstrip()
+    if content.startswith(':') and len(content) > 1 and content[1].isspace():
+        return blockquote_depth(line) if is_blockquote(line) else 0
+    return None
+
+def prepare_wrappable_line(line, skip_rules, skip_em_dash, skip_guillemet, reverse_emphasis,
+                          in_math_block, in_code_block):
+    """Apply the same per-line transforms as the main loop before wrap/rewrap."""
+    if 23 not in skip_rules and not in_math_block:
+        line = normalize_emoji_names(line)
+    if 24 not in skip_rules:
+        line = normalize_typography(line, skip_em_dash=skip_em_dash, skip_guillemet=skip_guillemet)
+    if 25 not in skip_rules:
+        line = normalize_bold_italic(line, reverse_emphasis=reverse_emphasis)
+    if 16 not in skip_rules:
+        line = normalize_ial_spacing(line)
+    if 31 not in skip_rules:
+        line = normalize_liquid_tag_spacing(line)
+    if 18 not in skip_rules:
+        line = normalize_reference_link(line)
+    if 21 not in skip_rules and not in_math_block:
+        line = normalize_math_spacing(line, in_code_block)
+    if 2 not in skip_rules:
+        line = normalize_trailing_whitespace(line)
+    return line
+
+def collect_paragraph_rewrap_groups(lines, start, prepare_fn):
+    """Collect consecutive paragraph lines for rewrap.
+
+    Returns (end_index, groups) where groups are lists of stripped line contents.
+    Hard line breaks start a new group.
+    """
+    groups = [[]]
+    i = start
+    while i < len(lines) and is_rewrapable_paragraph_line(lines[i], lines, i):
+        line = lines[i]
+        groups[-1].append(prepare_fn(line).strip())
+        if has_hard_line_break(line):
+            groups.append([])
+        i += 1
+    if groups and not groups[-1]:
+        groups.pop()
+    return i, groups
+
+def collect_blockquote_rewrap_groups(lines, start, prepare_fn):
+    """Collect consecutive blockquote lines at the same depth for rewrap."""
+    depth = blockquote_depth(lines[start])
+    groups = [[]]
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            break
+        if not is_blockquote(line) or blockquote_depth(line) != depth:
+            break
+        if quote_blank_depth(line) is not None or deflist_item_depth(line) is not None:
+            break
+        content = blockquote_content(prepare_fn(line)).strip()
+        if content:
+            groups[-1].append(content)
+        if has_hard_line_break(line):
+            groups.append([])
+        i += 1
+    if groups and not groups[-1]:
+        groups.pop()
+    return i, groups
+
+def apply_rewrap_groups(groups, wrap_width, prefix, output):
+    """Join each group, wrap at width, append lines to output."""
+    wrap_prefix = prefix
+    for group in groups:
+        if not group:
+            continue
+        joined = ' '.join(group)
+        if not joined:
+            continue
+        wrapped = wrap_text(joined, wrap_width, wrap_prefix)
+        for j, wrapped_line in enumerate(wrapped):
+            if j > 0 and prefix:
+                if wrapped_line.startswith(wrap_prefix):
+                    output.append(wrapped_line + '\n')
+                else:
+                    output.append(prefix + ' ' + wrapped_line.lstrip() + '\n')
+            else:
+                output.append(wrapped_line + '\n')
+
 # Define linting rules (numbered for --skip flag)
 LINTING_RULES = {
     1: ("Normalize line endings to Unix", "line-endings"),
@@ -2057,6 +2222,7 @@ LINTING_RULES = {
     29: ("Place link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)", "links-at-end"),
     30: ("Convert links to inline format (overrides reference-links if enabled)", "inline-links"),
     31: ("Normalize Liquid tag spacing", "liquid-tags"),
+    36: ("Rewrap hard-wrapped paragraphs to the configured width", "rewrap"),
 }
 
 # Create keyword to rule number mapping
@@ -3166,9 +3332,22 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                     changes_made = True
 
             prefix = get_blockquote_prefix(line)
-            content = line[len(prefix):].lstrip()
+            content = blockquote_content(line)
 
-            if 14 not in skip_rules:
+            if 14 not in skip_rules and wrap_width > 0:
+                if 36 not in skip_rules:
+                    def _prepare_bq(raw_line):
+                        return prepare_wrappable_line(
+                            raw_line, skip_rules, skip_em_dash, skip_guillemet,
+                            reverse_emphasis, in_math_block, in_code_block)
+                    end, groups = collect_blockquote_rewrap_groups(lines, i, _prepare_bq)
+                    if end > i + 1:
+                        before_len = len(output)
+                        apply_rewrap_groups(groups, wrap_width, prefix + ' ', output)
+                        if len(output) != before_len:
+                            changes_made = True
+                        i = end
+                        continue
                 if content and len(line.rstrip()) > wrap_width:
                     wrapped = wrap_text(content, wrap_width, prefix + ' ')
                     for j, wrapped_line in enumerate(wrapped):
@@ -3207,17 +3386,35 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
                     changes_made = True
 
             # Wrap if needed
-            if 14 not in skip_rules:
-                if len(line.rstrip()) > wrap_width:
-                    wrapped = wrap_text(stripped, wrap_width)
-                    for wrapped_line in wrapped:
-                        output.append(wrapped_line + '\n')
-                    changes_made = True
-                else:
-                    output.append(line)
+            if 14 not in skip_rules and wrap_width > 0:
+                rewrap_handled = False
+                if 36 not in skip_rules and not is_list_continuation_line(line, lines, i):
+                    def _prepare_para(raw_line):
+                        return prepare_wrappable_line(
+                            raw_line, skip_rules, skip_em_dash, skip_guillemet,
+                            reverse_emphasis, in_math_block, in_code_block)
+                    end, groups = collect_paragraph_rewrap_groups(lines, i, _prepare_para)
+                    if end > i + 1:
+                        before_len = len(output)
+                        apply_rewrap_groups(groups, wrap_width, '', output)
+                        if len(output) != before_len:
+                            changes_made = True
+                        i = end
+                        consecutive_blank_lines = 0
+                        rewrap_handled = True
+                if not rewrap_handled:
+                    if len(line.rstrip()) > wrap_width:
+                        wrapped = wrap_text(stripped, wrap_width)
+                        for wrapped_line in wrapped:
+                            output.append(wrapped_line + '\n')
+                        changes_made = True
+                    else:
+                        output.append(line)
             else:
                 output.append(line)
             consecutive_blank_lines = 0
+            i += 1
+            continue
         else:
             # Handle blank lines - collapse multiple (max 1 consecutive, except in code blocks)
             if 3 not in skip_rules:
@@ -3663,6 +3860,12 @@ Examples:
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
+
+    # rewrap requires wrap; --include rewrap enables both
+    if 36 not in skip_rules:
+        skip_rules.discard(14)
+    if 14 in skip_rules:
+        skip_rules.add(36)
 
     # If no files provided as arguments, check STDIN
     if not files and not sys.stdin.isatty():

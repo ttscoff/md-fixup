@@ -446,6 +446,78 @@ class TestComplexScenarios(unittest.TestCase):
         self.assertIn("2. Else", output)
 
 
+class TestRewrap(unittest.TestCase):
+    """Rewrap hard-wrapped paragraphs at the configured width."""
+
+    def test_rewrap_joins_short_lines(self):
+        content = (
+            "This is a hard wrapped paragraph that was broken\n"
+            "across multiple lines at a narrow width.\n"
+        )
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 40, overwrite=True, skip_rules={30})
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn(
+            "This is a hard wrapped paragraph that\n"
+            "was broken across multiple lines at a\n"
+            "narrow width.",
+            output,
+        )
+        self.assertNotIn("broken\nacross", output)
+
+    def test_rewrap_skipped_with_wrap(self):
+        content = (
+            "This is a hard wrapped paragraph that was broken\n"
+            "across multiple lines at a narrow width.\n"
+        )
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 40, overwrite=True, skip_rules={14, 30})
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn("broken\nacross", output)
+
+    def test_rewrap_blockquote_same_depth(self):
+        content = (
+            "> This is a quoted paragraph that was hard\n"
+            "> wrapped across several short lines.\n"
+        )
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 30, overwrite=True, skip_rules={30})
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn("> This is a quoted paragraph\n", output)
+        self.assertNotIn("that was hard\n", output)
+
+    def test_rewrap_not_nested_blockquote(self):
+        content = (
+            "> Outer quote line one.\n"
+            ">> Nested quote stays separate.\n"
+        )
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True, skip_rules={30})
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertIn(">> Nested quote stays separate.", output)
+        self.assertIn("> Outer quote line one.", output)
+
+
 class TestWrapAfterLinkConversion(unittest.TestCase):
     """Ensure wrapping happens after link conversion (inline -> reference)."""
 

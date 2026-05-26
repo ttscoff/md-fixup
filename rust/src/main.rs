@@ -3023,8 +3023,13 @@ fn tokenize_for_wrap(text: &str) -> Vec<String> {
 }
 
 fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
-    if text.chars().count() <= width {
-        return vec![text.to_string()];
+    let full_first_line = if prefix.is_empty() {
+        text.to_string()
+    } else {
+        format!("{}{}", prefix, text)
+    };
+    if full_first_line.chars().count() <= width {
+        return vec![full_first_line];
     }
 
     let words = tokenize_for_wrap(text);
@@ -3089,9 +3094,212 @@ fn wrap_text(text: &str, width: usize, prefix: &str) -> Vec<String> {
     }
 
     if lines.is_empty() {
-        vec![text.to_string()]
+        vec![full_first_line]
     } else {
         lines
+    }
+}
+
+fn has_hard_line_break(line: &str) -> bool {
+    let line_no_nl = line.trim_end_matches('\n');
+    if line_no_nl.ends_with("  ") {
+        return true;
+    }
+    line_no_nl.trim_end().ends_with('\\')
+}
+
+fn is_list_continuation_line(line: &str, lines: &[String], idx: usize) -> bool {
+    if line.trim().is_empty() || is_list_item(line) || is_blockquote(line) {
+        return false;
+    }
+    let line_indent = line.len() - line.trim_start().len();
+    if line_indent == 0 {
+        return false;
+    }
+    let mut j = idx;
+    while j > 0 {
+        j -= 1;
+        if lines[j].trim().is_empty() {
+            return false;
+        }
+        let prev = &lines[j];
+        if is_list_item(prev) {
+            let base_indent = prev.len() - prev.trim_start().len();
+            return line_indent > base_indent;
+        }
+        let prev_indent = prev.len() - prev.trim_start().len();
+        if prev_indent > 0 && line_indent >= prev_indent {
+            continue;
+        }
+        return false;
+    }
+    false
+}
+
+fn is_rewrapable_paragraph_line(line: &str, lines: &[String], idx: usize) -> bool {
+    if line.trim().is_empty() {
+        return false;
+    }
+    if should_preserve_line(line) || is_list_item(line) || is_blockquote(line) {
+        return false;
+    }
+    if is_headline(line) || is_horizontal_rule(line) {
+        return false;
+    }
+    !is_list_continuation_line(line, lines, idx)
+}
+
+struct LinePrepareContext<'a> {
+    skip_rules: &'a HashSet<u8>,
+    skip_em_dash: bool,
+    skip_guillemet: bool,
+    reverse_emphasis: bool,
+    replacements: &'a [Replacement],
+    valid_emoji_set: &'a HashSet<&'static str>,
+    in_math_block: bool,
+    in_code_block: bool,
+    in_frontmatter: bool,
+}
+
+impl<'a> LinePrepareContext<'a> {
+    fn prepare(&self, line: &str) -> String {
+        let mut line = line.to_string();
+
+        if !self.replacements.is_empty() {
+            let (new_line, _) = apply_replacements(
+                &line,
+                self.replacements,
+                ReplacementTiming::After,
+                self.in_code_block,
+                self.in_frontmatter,
+            );
+            line = new_line;
+        }
+
+        if !self.skip_rules.contains(&23) && !self.in_math_block {
+            line = normalize_emoji_names(&line, self.valid_emoji_set);
+        }
+        if !self.skip_rules.contains(&24) {
+            line = normalize_typography(&line, self.skip_em_dash, self.skip_guillemet);
+        }
+        if !self.skip_rules.contains(&25) {
+            line = normalize_bold_italic(&line, self.reverse_emphasis);
+        }
+        if !self.skip_rules.contains(&16) {
+            line = normalize_ial_spacing(&line);
+        }
+        if !self.skip_rules.contains(&31) {
+            line = normalize_liquid_tag_spacing(&line);
+        }
+        if !self.skip_rules.contains(&18) {
+            line = normalize_reference_link(&line);
+        }
+        if !self.skip_rules.contains(&21) && !self.in_math_block {
+            line = normalize_math_spacing(&line, self.in_code_block);
+        }
+        if !self.skip_rules.contains(&2) {
+            line = normalize_trailing_whitespace(&line);
+        }
+        if !self.replacements.is_empty() {
+            let (new_line, _) = apply_replacements(
+                &line,
+                self.replacements,
+                ReplacementTiming::After,
+                self.in_code_block,
+                self.in_frontmatter,
+            );
+            line = new_line;
+        }
+
+        line
+    }
+}
+
+fn collect_paragraph_rewrap_groups(
+    lines: &[String],
+    start: usize,
+    prepare: &LinePrepareContext<'_>,
+) -> (usize, Vec<Vec<String>>) {
+    let mut groups: Vec<Vec<String>> = vec![vec![]];
+    let mut i = start;
+    while i < lines.len() && is_rewrapable_paragraph_line(&lines[i], lines, i) {
+        let line = &lines[i];
+        let prepared = prepare.prepare(line);
+        groups.last_mut().unwrap().push(prepared.trim().to_string());
+        if has_hard_line_break(line) {
+            groups.push(vec![]);
+        }
+        i += 1;
+    }
+    if groups.last().map(|g| g.is_empty()).unwrap_or(false) {
+        groups.pop();
+    }
+    (i, groups)
+}
+
+fn collect_blockquote_rewrap_groups(
+    lines: &[String],
+    start: usize,
+    depth: usize,
+    prepare: &LinePrepareContext<'_>,
+) -> (usize, Vec<Vec<String>>) {
+    let mut groups: Vec<Vec<String>> = vec![vec![]];
+    let mut i = start;
+    while i < lines.len() {
+        let line = &lines[i];
+        if line.trim().is_empty() {
+            break;
+        }
+        if !is_blockquote(line) || blockquote_depth_and_remainder(line).0 != depth {
+            break;
+        }
+        // Do not join definition-list items or quote-only blank lines into rewrapped prose
+        if quote_blank_depth(line).is_some() || deflist_item_depth(line).is_some() {
+            break;
+        }
+        let prepared = prepare.prepare(line);
+        let content = blockquote_depth_and_remainder(&prepared).1.trim();
+        if !content.is_empty() {
+            groups.last_mut().unwrap().push(content.to_string());
+        }
+        if has_hard_line_break(line) {
+            groups.push(vec![]);
+        }
+        i += 1;
+    }
+    if groups.last().map(|g| g.is_empty()).unwrap_or(false) {
+        groups.pop();
+    }
+    (i, groups)
+}
+
+fn apply_rewrap_groups(
+    groups: &[Vec<String>],
+    wrap_width: usize,
+    prefix: &str,
+    output: &mut Vec<String>,
+) {
+    let wrap_prefix = prefix;
+    for group in groups {
+        if group.is_empty() {
+            continue;
+        }
+        let joined = group.join(" ");
+        if joined.is_empty() {
+            continue;
+        }
+        let wrapped = wrap_text(&joined, wrap_width, wrap_prefix);
+        for (j, wrapped_line) in wrapped.iter().enumerate() {
+            if j > 0 && !prefix.is_empty() {
+                if wrapped_line.starts_with(wrap_prefix) {
+                    output.push(format!("{}\n", wrapped_line));
+                } else {
+                    output.push(format!("{} {}\n", prefix.trim_end(), wrapped_line.trim_start()));
+                }
+            } else {
+                output.push(format!("{}\n", wrapped_line));
+            }
+        }
     }
 }
 
@@ -3137,6 +3345,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 33, description: "Compress list item spacing (remove unnecessary blank lines between items)", keyword: "compress-lists" },
     LintingRule { num: 34, description: "Normalize setext headings to ATX headings", keyword: "setext-to-atx" },
     LintingRule { num: 35, description: "Convert dash horizontal rules (---) to star-spaced rules (* * * * *)", keyword: "hr-stars" },
+    LintingRule { num: 36, description: "Rewrap hard-wrapped paragraphs to the configured width", keyword: "rewrap" },
 ];
 
 fn apply_cli_rule_item(value: &str, rules: &mut HashSet<u8>) -> Result<(), String> {
@@ -4576,7 +4785,37 @@ fn process_file(
                 (p, c)
             };
 
-            if !skip_rules.contains(&14) {
+            if !skip_rules.contains(&14) && wrap_width > 0 {
+                if !skip_rules.contains(&36) {
+                    let depth = blockquote_depth_and_remainder(&line).0;
+                    let prepare_ctx = LinePrepareContext {
+                        skip_rules,
+                        skip_em_dash,
+                        skip_guillemet,
+                        reverse_emphasis,
+                        replacements,
+                        valid_emoji_set: &valid_emoji_set,
+                        in_math_block,
+                        in_code_block,
+                        in_frontmatter,
+                    };
+                    let (end, groups) =
+                        collect_blockquote_rewrap_groups(&lines, i, depth, &prepare_ctx);
+                    if end > i + 1 {
+                        let before_len = output.len();
+                        apply_rewrap_groups(
+                            &groups,
+                            wrap_width,
+                            &format!("{} ", prefix),
+                            &mut output,
+                        );
+                        if output.len() != before_len {
+                            changes_made = true;
+                        }
+                        i = end;
+                        continue;
+                    }
+                }
                 if !content.is_empty() && line.trim_end().chars().count() > wrap_width {
                     let wrapped = wrap_text(content, wrap_width, &format!("{} ", prefix));
                     for (j, wrapped_line) in wrapped.iter().enumerate() {
@@ -4645,7 +4884,31 @@ fn process_file(
                 }
             }
 
-            if !skip_rules.contains(&14) {
+            if !skip_rules.contains(&14) && wrap_width > 0 {
+                if !skip_rules.contains(&36) && !is_list_continuation_line(&line, &lines, i) {
+                    let prepare_ctx = LinePrepareContext {
+                        skip_rules,
+                        skip_em_dash,
+                        skip_guillemet,
+                        reverse_emphasis,
+                        replacements,
+                        valid_emoji_set: &valid_emoji_set,
+                        in_math_block,
+                        in_code_block,
+                        in_frontmatter,
+                    };
+                    let (end, groups) = collect_paragraph_rewrap_groups(&lines, i, &prepare_ctx);
+                    if end > i + 1 {
+                        let before_len = output.len();
+                        apply_rewrap_groups(&groups, wrap_width, "", &mut output);
+                        if output.len() != before_len {
+                            changes_made = true;
+                        }
+                        i = end;
+                        consecutive_blank_lines = 0;
+                        continue;
+                    }
+                }
                 if line.trim_end().chars().count() > wrap_width {
                     let stripped = line.trim();
                     let wrapped = wrap_text(stripped, wrap_width, "");
@@ -5084,6 +5347,14 @@ Examples:
                 std::process::exit(1);
             }
         }
+    }
+
+    // rewrap requires wrap; --include rewrap enables both
+    if !skip_rules.contains(&36) {
+        skip_rules.remove(&14);
+    }
+    if skip_rules.contains(&14) {
+        skip_rules.insert(36);
     }
 
     let reverse_emphasis = matches.get_flag("reverse-emphasis");
@@ -5831,6 +6102,33 @@ mod tests {
             input,
             output
         );
+    }
+
+    #[test]
+    fn test_rewrap_joins_short_lines() {
+        let input = "This is a hard wrapped paragraph that was broken\nacross multiple lines at a narrow width.\n";
+        let output = process_test_content_with_width(input, 40);
+        assert!(output.contains(
+            "This is a hard wrapped paragraph that\nwas broken across multiple lines at a\nnarrow width."
+        ));
+        assert!(!output.contains("broken\nacross"));
+    }
+
+    #[test]
+    fn test_rewrap_blockquote_same_depth() {
+        let input =
+            "> This is a quoted paragraph that was hard\n> wrapped across several short lines.\n";
+        let output = process_test_content_with_width(input, 30);
+        assert!(output.contains("> This is a quoted paragraph\n"));
+        assert!(!output.contains("that was hard\n"));
+    }
+
+    #[test]
+    fn test_rewrap_not_nested_blockquote() {
+        let input = "> Outer quote line one.\n>> Nested quote stays separate.\n";
+        let output = process_test_content(input);
+        assert!(output.contains(">> Nested quote stays separate."));
+        assert!(output.contains("> Outer quote line one."));
     }
 
     #[test]

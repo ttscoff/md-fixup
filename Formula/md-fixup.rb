@@ -14,19 +14,19 @@ class MdFixup < Formula
   # Binary distribution (faster installation)
   if OS.mac?
     if Hardware::CPU.intel?
-      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.40/md-fixup-x86_64-apple-darwin.tar.gz"
-      sha256 "7fafe9ce9deb09fe635ebed3323404bb89c13a9ba106e7e1ae42ebfaf515e7e9"
+      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.42/md-fixup-x86_64-apple-darwin.tar.gz"
+      sha256 "b06627a2520f11dd7f755fe61e4554c7c768d5d270c36450eaceabbbce347095"
     else
-      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.40/md-fixup-aarch64-apple-darwin.tar.gz"
-      sha256 "ce805dfcf213d731abf1b580127ffe3fa57d9e99957dbc63476653c160ce8294"
+      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.42/md-fixup-aarch64-apple-darwin.tar.gz"
+      sha256 "37550cb3b51e04fecbfff1110bbdb46d16760bd61136f9c1304dc6c11b280679"
     end
   else
     if Hardware::CPU.intel?
-      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.40/md-fixup-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "c15291ca1159d250efc5d536de7b00ecc97baec1456aeea4950c051f714f953b"
+      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.42/md-fixup-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "59ce679f18842a28a4b5e3ec611e1d577c4c5b42efd7417260eeffb77b15af9c"
     else
-      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.40/md-fixup-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "714202762e19f714ee9b4c5a0f701758a4f20f0516a5abc642e8782a446013b9"
+      url "https://github.com/ttscoff/md-fixup/releases/download/v0.1.42/md-fixup-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "a8376e0dd9b6772ef2cd3c134f9a01c067c98788a43adc2756a938c599f89019"
     end
   end
 

@@ -2,3 +2,11 @@ rust/target
 python/__pycache__/
 PUBLISHING*.md
 test.md
+.cursor
+.github
+.DS_Store
+buildnotes.md
+md-fixup.taskpaper
+*/.DS_Store
+commit_message.txt
+tag_message.md

@@ -157,12 +157,16 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Extract changelog release notes
+        run: python3 scripts/release_notes.py show "${{ steps.tag.outputs.version }}" > release_notes.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref }}
           name: Release v${{ steps.tag.outputs.version }}
           files: artifacts/**/*
-          generate_release_notes: true
+          body_path: release_notes.md
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

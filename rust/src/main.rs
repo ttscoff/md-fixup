@@ -2365,11 +2365,205 @@ fn is_in_code_span(text: &str, pos: usize) -> bool {
     backticks % 2 == 1
 }
 
+struct PendingDef {
+    line_idx: usize,
+    start: usize,
+    text: String,
+}
+
+fn reference_definition_line(id: &str, url: &str, title: &Option<String>) -> String {
+    match title {
+        Some(title) => format!("[{}]: {} \"{}\"\n", id, url, title),
+        None => format!("[{}]: {}\n", id, url),
+    }
+}
+
+fn is_blank_line(line: &str) -> bool {
+    line.trim().is_empty()
+}
+
+fn line_indent(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+fn next_nonblank(lines: &[String], start: usize) -> Option<usize> {
+    let mut j = start;
+    while j < lines.len() && is_blank_line(&lines[j]) {
+        j += 1;
+    }
+    if j < lines.len() {
+        Some(j)
+    } else {
+        None
+    }
+}
+
+/// Last line of a list, including nested items, loose-item continuations, and the
+/// blank lines between them. A definition inserted earlier would split the list.
+fn list_block_end(lines: &[String], start: usize) -> usize {
+    let base = line_indent(&lines[start]);
+    let mut i = start;
+    let mut last = start;
+    while i < lines.len() {
+        let current = &lines[i];
+        if is_blank_line(current) {
+            let Some(j) = next_nonblank(lines, i + 1) else {
+                return last;
+            };
+            let next = &lines[j];
+            if (is_list_item(next) && line_indent(next) >= base) || line_indent(next) > base {
+                i = j;
+                continue;
+            }
+            return last;
+        }
+        if is_list_item(current) && line_indent(current) >= base {
+            last = i;
+            i += 1;
+            continue;
+        }
+        if line_indent(current) > base {
+            last = i;
+            i += 1;
+            continue;
+        }
+        return last;
+    }
+    last
+}
+
+fn code_fence_end(lines: &[String], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < lines.len() {
+        if is_code_block(&lines[i]) {
+            return i;
+        }
+        i += 1;
+    }
+    lines.len().saturating_sub(1)
+}
+
+fn blockquote_end(lines: &[String], start: usize) -> usize {
+    let mut i = start;
+    let mut last = start;
+    while i < lines.len() {
+        if is_blank_line(&lines[i]) {
+            match next_nonblank(lines, i + 1) {
+                Some(j) if is_blockquote(&lines[j]) => {
+                    i = j;
+                    continue;
+                }
+                _ => return last,
+            }
+        }
+        if is_blockquote(&lines[i]) {
+            last = i;
+            i += 1;
+            continue;
+        }
+        return last;
+    }
+    last
+}
+
+fn paragraph_end(lines: &[String], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < lines.len() {
+        let current = &lines[i];
+        if is_blank_line(current)
+            || is_headline(current)
+            || is_list_item(current)
+            || is_code_block(current)
+            || is_horizontal_rule(current)
+            || is_blockquote(current)
+            || current.trim() == "$$"
+        {
+            return i - 1;
+        }
+        i += 1;
+    }
+    lines.len() - 1
+}
+
+fn block_end(lines: &[String], start: usize) -> usize {
+    let line = &lines[start];
+    if is_blank_line(line) {
+        return start;
+    }
+    if is_code_block(line) {
+        return code_fence_end(lines, start);
+    }
+    if line.trim() == "$$" {
+        let mut i = start + 1;
+        while i < lines.len() {
+            if lines[i].trim() == "$$" {
+                return i;
+            }
+            i += 1;
+        }
+        return lines.len().saturating_sub(1);
+    }
+    if is_headline(line) {
+        if start + 1 < lines.len() && is_setext_heading(&lines[start + 1]) {
+            return start + 1;
+        }
+        return start;
+    }
+    if is_horizontal_rule(line) {
+        return start;
+    }
+    if is_blockquote(line) {
+        return blockquote_end(lines, start);
+    }
+    if is_list_item(line) {
+        return list_block_end(lines, start);
+    }
+    paragraph_end(lines, start)
+}
+
+fn place_definitions_after_blocks(lines: &[String], defs: &[PendingDef]) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if is_blank_line(&lines[i]) {
+            output.push(lines[i].clone());
+            i += 1;
+            continue;
+        }
+        let end = block_end(lines, i);
+        output.extend(lines[i..=end].iter().cloned());
+        let mut block_defs: Vec<&PendingDef> = defs
+            .iter()
+            .filter(|def| def.line_idx >= i && def.line_idx <= end)
+            .collect();
+        block_defs.sort_by_key(|def| (def.line_idx, def.start));
+        if !block_defs.is_empty() {
+            if output.last().is_some_and(|line| !is_blank_line(line)) {
+                output.push("\n".to_string());
+            }
+            for def in block_defs {
+                output.push(def.text.clone());
+            }
+            // One blank line after the whole group, including at the end of the file.
+            // Swallow source blanks so the group is not followed by a double gap.
+            output.push("\n".to_string());
+            i = end + 1;
+            while i < lines.len() && is_blank_line(&lines[i]) {
+                i += 1;
+            }
+            continue;
+        }
+        i = end + 1;
+    }
+    output
+}
+
 fn convert_links_in_document(
     lines: &mut Vec<String>,
     use_inline: bool,
     use_reference: bool,
     place_at_beginning: bool,
+    place_after_occurrence: bool,
 ) {
     if !use_inline && !use_reference {
         return;
@@ -2613,9 +2807,13 @@ fn convert_links_in_document(
         let mut text_ref_to_url: std::collections::HashMap<String, (String, Option<String>)> =
             std::collections::HashMap::new();
         let mut text_ref_order: Vec<String> = Vec::new();
+        let mut text_ref_pos: std::collections::HashMap<String, (usize, usize)> =
+            std::collections::HashMap::new();
 
         // Track numeric references for inline links only
         let mut url_to_ref: std::collections::HashMap<(String, Option<String>), usize> =
+            std::collections::HashMap::new();
+        let mut ref_num_pos: std::collections::HashMap<usize, (usize, usize)> =
             std::collections::HashMap::new();
 
         // First pass: collect text-based reference IDs (including numeric ones)
@@ -2628,6 +2826,7 @@ fn convert_links_in_document(
                             .insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
                         if !text_ref_order.contains(ref_id) {
                             text_ref_order.push(ref_id.clone());
+                            text_ref_pos.insert(ref_id.clone(), (link.line_idx, link.start));
                         }
                     }
                 }
@@ -2639,6 +2838,7 @@ fn convert_links_in_document(
                             .insert(ref_id.clone(), (link.url.clone(), link.title.clone()));
                         if !text_ref_order.contains(ref_id) {
                             text_ref_order.push(ref_id.clone());
+                            text_ref_pos.insert(ref_id.clone(), (link.line_idx, link.start));
                         }
                     }
                 }
@@ -2675,6 +2875,7 @@ fn convert_links_in_document(
                             next_ref += 1;
                         }
                         e.insert(next_ref);
+                        ref_num_pos.insert(next_ref, (link.line_idx, link.start));
                         used_numeric_ids.insert(next_ref);
                         next_ref += 1;
                     }
@@ -2807,7 +3008,27 @@ fn convert_links_in_document(
 
         // Add reference definitions
         // Organize: text-based refs first (in document order), then numbered refs
-        if place_at_beginning {
+        if place_after_occurrence {
+            let mut defs = Vec::new();
+            for ref_id in &text_ref_order {
+                let (url, title) = &text_ref_to_url[ref_id];
+                let (line_idx, start) = text_ref_pos[ref_id];
+                defs.push(PendingDef {
+                    line_idx,
+                    start,
+                    text: reference_definition_line(ref_id, url, title),
+                });
+            }
+            for ((url, title), ref_num) in &url_to_ref {
+                let (line_idx, start) = ref_num_pos[ref_num];
+                defs.push(PendingDef {
+                    line_idx,
+                    start,
+                    text: reference_definition_line(&ref_num.to_string(), url, title),
+                });
+            }
+            *lines = place_definitions_after_blocks(lines, &defs);
+        } else if place_at_beginning {
             // Place all definitions at the beginning
             // Remove any leading blank lines and front matter
             let mut insert_pos = 0;
@@ -3350,6 +3571,7 @@ const LINTING_RULES: &[LintingRule] = &[
     LintingRule { num: 34, description: "Normalize setext headings to ATX headings", keyword: "setext-to-atx" },
     LintingRule { num: 35, description: "Convert dash horizontal rules (---) to star-spaced rules (* * * * *)", keyword: "hr-stars" },
     LintingRule { num: 36, description: "Rewrap hard-wrapped paragraphs to the configured width", keyword: "rewrap" },
+    LintingRule { num: 37, description: "Place each link definition after the block where that link first appears", keyword: "links-after-occurrence" },
 ];
 
 fn apply_cli_rule_item(value: &str, rules: &mut HashSet<u8>) -> Result<(), String> {
@@ -3457,6 +3679,29 @@ impl<'de> Deserialize<'de> for RulesList {
             )),
         }
     }
+}
+
+fn config_include_list_contains(config: Option<&Config>, keyword: &str, num: u8) -> bool {
+    let Some(config) = config else {
+        return false;
+    };
+    let Some(rules) = config.rules.as_ref() else {
+        return false;
+    };
+    let Some(RulesList::List(include_list)) = rules.include.as_ref() else {
+        return false;
+    };
+    if let Some(RulesList::List(skip_list)) = rules.skip.as_ref() {
+        if skip_list
+            .iter()
+            .any(|item| item == keyword || item.parse::<u8>().ok() == Some(num))
+        {
+            return false;
+        }
+    }
+    include_list
+        .iter()
+        .any(|item| item == keyword || item.parse::<u8>().ok() == Some(num))
 }
 
 fn config_include_all(config: &Config) -> bool {
@@ -3999,18 +4244,26 @@ fn process_file(
         link_skip_rules.insert(29);
     }
 
-    // If links-at-end is included, reference-links is included by default
-    if !link_skip_rules.contains(&29) {
-        link_skip_rules.remove(&28); // Enable reference-links if links-at-end is enabled
+    // links-after-occurrence implies reference links and overrides end/beginning placement
+    let place_after_occurrence = !link_skip_rules.contains(&37) && !use_inline;
+    if place_after_occurrence || !link_skip_rules.contains(&29) {
+        link_skip_rules.remove(&28);
     }
 
     let use_reference = !link_skip_rules.contains(&28) && !use_inline;
     // place_at_beginning = True if links-at-end is skipped AND reference-links is enabled
-    let place_at_beginning = link_skip_rules.contains(&29) && use_reference;
+    let place_at_beginning =
+        link_skip_rules.contains(&29) && use_reference && !place_after_occurrence;
 
     if use_inline || use_reference {
         let before = lines.clone();
-        convert_links_in_document(&mut lines, use_inline, use_reference, place_at_beginning);
+        convert_links_in_document(
+            &mut lines,
+            use_inline,
+            use_reference,
+            place_at_beginning,
+            place_after_occurrence && use_reference,
+        );
         if lines != before {
             changes_made = true;
         }
@@ -4524,6 +4777,9 @@ fn process_file(
                 }
             }
             output.push(line);
+            // A preserved line, such as a link definition, breaks a blank-line run.
+            // Otherwise the blank line after a definition group is collapsed away.
+            consecutive_blank_lines = 0;
             i += 1;
             continue;
         }
@@ -5323,6 +5579,12 @@ Examples:
         skip_rules.insert(30);
     }
 
+    // Rule 37 (links-after-occurrence) stays off unless a config include list names it.
+    // include: all does not turn it on; it would override links-at-end.
+    if !config_include_list_contains(config.as_ref(), "links-after-occurrence", 37) {
+        skip_rules.insert(37);
+    }
+
     let skip_str = matches.get_one::<String>("skip");
     let (cli_skip_rules, skip_em_dash, skip_guillemet) = if let Some(skip_str) = skip_str {
         match parse_skip_rules(skip_str) {
@@ -5559,6 +5821,8 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
+        // Rule 37 (links-after-occurrence) is opt-in
+        skip_rules.insert(37);
         // Use overwrite=true so the file is actually modified
         process_file(path, 60, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -6168,6 +6432,8 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
+        // Rule 37 (links-after-occurrence) is opt-in
+        skip_rules.insert(37);
         // Use overwrite=true so the file is actually modified
         process_file(path, width, true, &skip_rules, false, false, false, &[]).unwrap();
 
@@ -6175,6 +6441,13 @@ mod tests {
     }
 
     fn process_test_content_with_skip(content: &str, skip_rules: &HashSet<u8>) -> String {
+        let mut skip_rules = skip_rules.clone();
+        // Rule 37 is opt-in. Existing tests keep end/beginning placement.
+        skip_rules.insert(37);
+        process_test_content_with_exact_skip(content, &skip_rules)
+    }
+
+    fn process_test_content_with_exact_skip(content: &str, skip_rules: &HashSet<u8>) -> String {
         let mut file = NamedTempFile::new().unwrap();
         write!(file, "{}", content).unwrap();
         file.flush().unwrap();
@@ -6248,6 +6521,78 @@ mod tests {
         let last_non_empty = lines.iter().rev().find(|l| !l.trim().is_empty());
         assert!(last_non_empty.is_some());
         assert!(last_non_empty.unwrap().contains("[1]:"));
+    }
+
+    fn process_links_after_occurrence(content: &str) -> String {
+        let mut skip_rules: HashSet<u8> = (1..=36).collect();
+        skip_rules.remove(&1); // line endings
+        skip_rules.remove(&28); // reference-links
+                                // 29 links-at-end stays skipped. 37 is not skipped.
+        process_test_content_with_exact_skip(content, &skip_rules)
+    }
+
+    #[test]
+    fn test_links_after_occurrence_group_blank_survives_compression() {
+        let mut skip_rules: HashSet<u8> = (1..=36).collect();
+        skip_rules.remove(&1);
+        skip_rules.remove(&3); // blank-lines stays on
+        skip_rules.remove(&28);
+        let input = "See [the docs](https://example.com/docs) and [the repo](https://example.com/repo).\n\nLater.\n";
+        let output = process_test_content_with_exact_skip(input, &skip_rules);
+        assert!(
+            output.contains(
+                "[1]: https://example.com/docs\n[2]: https://example.com/repo\n\nLater.\n"
+            ),
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_links_after_occurrence_paragraph_and_reuse() {
+        let input = "See [the docs](https://example.com/docs) and [the repo](https://example.com/repo).\n\nLater [the docs](https://example.com/docs) again.\n";
+        let output = process_links_after_occurrence(input);
+        assert_eq!(
+            output,
+            "See [the docs][1] and [the repo][2].\n\n[1]: https://example.com/docs\n[2]: https://example.com/repo\n\nLater [the docs][1] again.\n",
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_links_after_occurrence_after_entire_list() {
+        let input = "* Item with [the docs](https://example.com/docs)\n\n  More about the docs.\n\n* Item with [issues](https://example.com/issues)\n";
+        let output = process_links_after_occurrence(input);
+        assert_eq!(
+            output,
+            "* Item with [the docs][1]\n\n  More about the docs.\n\n* Item with [issues][2]\n\n[1]: https://example.com/docs\n[2]: https://example.com/issues\n\n",
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_links_after_occurrence_heading_and_tight_list() {
+        let input = "# See [docs](https://example.com/docs)\n\nNext paragraph.\n\n* One [docs](https://example.com/docs)\n* Two [issues](https://example.com/issues)\n";
+        let output = process_links_after_occurrence(input);
+        assert_eq!(
+            output,
+            "# See [docs][1]\n\n[1]: https://example.com/docs\n\nNext paragraph.\n\n* One [docs][1]\n* Two [issues][2]\n\n[2]: https://example.com/issues\n\n",
+            "Output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_links_after_occurrence_same_url_once() {
+        let input = "A [one](https://example.com) and [two](https://example.com).\n";
+        let output = process_links_after_occurrence(input);
+        assert_eq!(
+            output, "A [one][1] and [two][1].\n\n[1]: https://example.com\n\n",
+            "Output:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -6532,6 +6877,8 @@ mod tests {
         let mut skip_rules = HashSet::new();
         // Rule 30 (inline-links) is disabled by default
         skip_rules.insert(30);
+        // Rule 37 (links-after-occurrence) is opt-in
+        skip_rules.insert(37);
         // Use overwrite=true so the file is actually modified
         process_file(
             path,

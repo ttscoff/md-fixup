@@ -6,7 +6,7 @@ A comprehensive markdown linter and formatter that normalizes formatting and wra
 
 ## Features
 
-md-fixup performs 36 different normalization and formatting rules:
+md-fixup performs 37 different normalization and formatting rules:
 
 1. Normalizes line endings to Unix
 2. Trims trailing whitespace (preserves exactly 2 spaces for line breaks)
@@ -44,6 +44,7 @@ md-fixup performs 36 different normalization and formatting rules:
 34. Normalizes setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 35. Converts dash-only horizontal rules (`---` or longer) to star-spaced rules (`* * * * *`) (off by default)
 36. Rewraps hard-wrapped paragraphs to the configured width (enabled with wrap; skips lists, tables, and code blocks)
+37. Places each link definition after the block where that link first appears (off by default, including with `include: all`; overrides `links-at-end`)
 
 **Definition lists:** md-fixup compresses definition lists by removing blank lines before and between consecutive definition items (`:\s+`). This also works inside blockquotes (removing quote-only blank lines like `>` between definition items). This behavior is part of rule `3` (`blank-lines`).
 
@@ -165,6 +166,7 @@ Rules can be skipped using either their number or keyword:
 - `34` / `setext-to-atx` - Normalize setext headings (`===` / `---`) to ATX headings (`#` / `##`)
 - `35` / `hr-stars` - Convert dash-only horizontal rules to star-spaced rules (`* * * * *`)
 - `36` / `rewrap` - Rewrap hard-wrapped paragraphs to the configured width (on by default when `wrap` is enabled; use `--skip rewrap` to only wrap lines longer than the width)
+- `37` / `links-after-occurrence` - Place each link definition after the block where that link first appears. Off unless named in an `include` list or `--include` (`include: all` does not turn it on). Several links in one block stay stacked, and the group is always followed by one blank line. A repeated link is defined only after its first block. List links are defined after the whole list. Implies `reference-links` and overrides `links-at-end`. `inline-links` still wins when it is enabled.
 
 Group keywords (expand to multiple rules):
 
@@ -197,8 +199,8 @@ The `rules` section supports three patterns:
 
 | Pattern | YAML | Effect |
 | --- | --- | --- |
-| Enable all, then opt out | `include: all` plus optional `skip: [list]` | Every rule runs, including `inline-links`, except those listed under `skip`. |
-| Skip only | `skip: [list]` (no `include`) | Listed rules are off; `inline-links` stays off unless enabled explicitly. |
+| Enable all, then opt out | `include: all` plus optional `skip: [list]` | Every rule runs, including `inline-links`, except those listed under `skip`. `links-after-occurrence` stays off. |
+| Skip only | `skip: [list]` (no `include`) | Listed rules are off; `inline-links` and `links-after-occurrence` stay off unless enabled explicitly. |
 | Legacy allowlist | `skip: all` plus `include: [list]` | Everything off first; only listed rules run. Still supported for existing configs. Pair with CLI `--include` to enable rules per invocation. |
 
 Recommended starting point:
@@ -240,6 +242,27 @@ rules:
 ```
 
 If the same rule appears in both `skip` and `include` under the legacy pattern, `include` wins and the rule runs. With `include: all`, only `skip` is consulted.
+
+**Link placement.** With `reference-links` on, definitions go at the end of the document. Skip `links-at-end` and they go at the beginning, after any YAML front matter. Name `links-after-occurrence` in an include list, or pass `--include links-after-occurrence`, to put each definition after the block where the link is first used:
+
+```markdown
+See [the docs][1] and [the repo][2].
+
+[1]: https://example.com/docs
+[2]: https://example.com/repo
+
+Later [the docs][1] again.
+```
+
+Definitions that belong to the same block are stacked with no blank lines between them. The group is always followed by one blank line. Headings, paragraphs, and blockquotes each get their own group. Tight and loose lists keep every definition after the last item, so a definition does not split the list. The same URL keeps one numeric id, and a later use does not get a second definition. Links inside code spans, fenced code, and front matter are left alone. `inline-links` still overrides this placement when that rule is on.
+
+```yaml
+rules:
+  skip: all
+  include:
+    - reference-links
+    - links-after-occurrence
+```
 
 **Configuration merging:**
 - Command-line arguments always override config file settings

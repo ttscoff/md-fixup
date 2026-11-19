@@ -518,6 +518,31 @@ class TestRewrap(unittest.TestCase):
         self.assertIn("> Outer quote line one.", output)
 
 
+class TestLinksAfterOccurrence(unittest.TestCase):
+    def test_definition_follows_first_paragraph_only(self):
+        content = (
+            "See [the docs](https://example.com/docs).\n\n"
+            "Later [the docs](https://example.com/docs) again.\n"
+        )
+        skip = set(range(1, 37))
+        skip.discard(1)
+        skip.discard(28)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            f.flush()
+            md_fixup.process_file(f.name, 60, overwrite=True, skip_rules=skip)
+            with open(f.name, 'r') as result:
+                output = result.read()
+            os.unlink(f.name)
+
+        self.assertEqual(
+            output,
+            "See [the docs][1].\n\n"
+            "[1]: https://example.com/docs\n\n"
+            "Later [the docs][1] again.\n",
+        )
+
+
 class TestWrapAfterLinkConversion(unittest.TestCase):
     """Ensure wrapping happens after link conversion (inline -> reference)."""
 

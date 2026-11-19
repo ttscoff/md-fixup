@@ -32,6 +32,7 @@ Markdown linter that:
 28. Converts links to numeric reference links
 29. Places link definitions at the end of the document (if skipped and reference-links enabled, places at beginning)
 30. Converts links to inline format (overrides reference-links if enabled)
+37. Places each link definition after the block where that link first appears (off by default; stacked definitions are followed by one blank line)
 
 Table cleanup script: Dr. Drang <https://leancrew.com/>
 """
@@ -2223,6 +2224,7 @@ LINTING_RULES = {
     30: ("Convert links to inline format (overrides reference-links if enabled)", "inline-links"),
     31: ("Normalize Liquid tag spacing", "liquid-tags"),
     36: ("Rewrap hard-wrapped paragraphs to the configured width", "rewrap"),
+    37: ("Place each link definition after the block where that link first appears", "links-after-occurrence"),
 }
 
 # Create keyword to rule number mapping
@@ -2335,7 +2337,143 @@ def get_top_level_element_end(lines, start_idx):
         i += 1
     return len(lines) - 1
 
-def convert_links_in_document(lines, use_inline, use_reference, place_at_beginning):
+def _reference_definition_line(ref_id, url, title):
+    if title:
+        return f'[{ref_id}]: {url} "{title}"\n'
+    return f'[{ref_id}]: {url}\n'
+
+
+def _is_blank_line(line):
+    return not line.strip()
+
+
+def _line_indent(line):
+    return len(line) - len(line.lstrip(' \t'))
+
+
+def _next_nonblank(lines, start):
+    j = start
+    while j < len(lines) and _is_blank_line(lines[j]):
+        j += 1
+    return j if j < len(lines) else None
+
+
+def _list_block_end(lines, start):
+    base = _line_indent(lines[start])
+    i = start
+    last = start
+    while i < len(lines):
+        current = lines[i]
+        if _is_blank_line(current):
+            j = _next_nonblank(lines, i + 1)
+            if j is None:
+                return last
+            nxt = lines[j]
+            if (is_list_item(nxt) and _line_indent(nxt) >= base) or _line_indent(nxt) > base:
+                i = j
+                continue
+            return last
+        if is_list_item(current) and _line_indent(current) >= base:
+            last = i
+            i += 1
+            continue
+        if _line_indent(current) > base:
+            last = i
+            i += 1
+            continue
+        return last
+    return last
+
+
+def _blockquote_end(lines, start):
+    i = start
+    last = start
+    while i < len(lines):
+        if _is_blank_line(lines[i]):
+            j = _next_nonblank(lines, i + 1)
+            if j is not None and is_blockquote(lines[j]):
+                i = j
+                continue
+            return last
+        if is_blockquote(lines[i]):
+            last = i
+            i += 1
+            continue
+        return last
+    return last
+
+
+def _paragraph_end(lines, start):
+    i = start + 1
+    while i < len(lines):
+        current = lines[i]
+        if (_is_blank_line(current) or is_headline(current) or is_list_item(current)
+                or is_code_block(current) or is_horizontal_rule(current)
+                or is_blockquote(current) or current.strip() == '$$'):
+            return i - 1
+        i += 1
+    return len(lines) - 1
+
+
+def _block_end(lines, start):
+    line = lines[start]
+    if _is_blank_line(line):
+        return start
+    if is_code_block(line):
+        i = start + 1
+        while i < len(lines):
+            if is_code_block(lines[i]):
+                return i
+            i += 1
+        return max(len(lines) - 1, start)
+    if line.strip() == '$$':
+        i = start + 1
+        while i < len(lines):
+            if lines[i].strip() == '$$':
+                return i
+            i += 1
+        return max(len(lines) - 1, start)
+    if is_headline(line):
+        if start + 1 < len(lines) and re.match(r'^(={2,}|-{2,})\s*$', lines[start + 1].strip()):
+            return start + 1
+        return start
+    if is_horizontal_rule(line):
+        return start
+    if is_blockquote(line):
+        return _blockquote_end(lines, start)
+    if is_list_item(line):
+        return _list_block_end(lines, start)
+    return _paragraph_end(lines, start)
+
+
+def _place_definitions_after_blocks(lines, defs):
+    output = []
+    i = 0
+    while i < len(lines):
+        if _is_blank_line(lines[i]):
+            output.append(lines[i])
+            i += 1
+            continue
+        end = _block_end(lines, i)
+        output.extend(lines[i:end + 1])
+        block_defs = [item for item in defs if i <= item[0] <= end]
+        block_defs.sort(key=lambda item: (item[0], item[1]))
+        if block_defs:
+            if not output or not _is_blank_line(output[-1]):
+                output.append('\n')
+            for item in block_defs:
+                output.append(item[2])
+            # One blank line after the whole group, including at the end of the file.
+            output.append('\n')
+            i = end + 1
+            while i < len(lines) and _is_blank_line(lines[i]):
+                i += 1
+            continue
+        i = end + 1
+    return output
+
+
+def convert_links_in_document(lines, use_inline, use_reference, place_at_beginning, place_after_occurrence=False):
     """Convert all links in the document using approach similar to formd gist
 
     Based on: https://gist.github.com/ttscoff/3907181
@@ -2527,9 +2665,11 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
         text_ref_to_url = {}  # Maps ref_id -> (url, title)
         # Track which text-based refs we've seen in the document (for ordering)
         text_ref_order = []  # List of ref_ids in document order
+        text_ref_pos = {}  # ref_id -> (line_idx, start)
 
         # Track numeric references for inline links only
         url_to_ref = {}  # Maps (url, title) -> ref_num
+        ref_num_pos = {}  # ref_num -> (line_idx, start)
         next_ref = 1
 
         # First pass: collect text-based reference IDs (including numeric ones)
@@ -2542,12 +2682,14 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                     text_ref_to_url[ref_id] = (url, title)
                     if ref_id not in text_ref_order:
                         text_ref_order.append(ref_id)
+                        text_ref_pos[ref_id] = (line_idx, start)
             elif link_type == 'implicit':
                 # Preserve implicit reference links - track their ID and URL
                 if ref_id and url:  # Only if we have both
                     text_ref_to_url[ref_id] = (url, title)
                     if ref_id not in text_ref_order:
                         text_ref_order.append(ref_id)
+                        text_ref_pos[ref_id] = (line_idx, start)
 
         # Determine the highest numeric ID used in text-based references
         # This ensures we don't duplicate numeric IDs when assigning to inline links
@@ -2578,6 +2720,7 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
                         while next_ref in used_numeric_ids:
                             next_ref += 1
                         url_to_ref[url_key] = next_ref
+                        ref_num_pos[next_ref] = (line_idx, start)
                         used_numeric_ids.add(next_ref)
                         next_ref += 1
 
@@ -2689,7 +2832,17 @@ def convert_links_in_document(lines, use_inline, use_reference, place_at_beginni
 
         # Add reference definitions
         # Organize: text-based refs first (in document order), then numbered refs
-        if place_at_beginning:
+        if place_after_occurrence:
+            defs = []
+            for ref_id in text_ref_order:
+                url, title = text_ref_to_url[ref_id]
+                line_idx, start = text_ref_pos[ref_id]
+                defs.append((line_idx, start, _reference_definition_line(ref_id, url, title)))
+            for (url, title), ref_num in url_to_ref.items():
+                line_idx, start = ref_num_pos[ref_num]
+                defs.append((line_idx, start, _reference_definition_line(ref_num, url, title)))
+            lines = _place_definitions_after_blocks(lines, defs)
+        elif place_at_beginning:
             # Place all definitions at the beginning
             # Remove any leading blank lines and front matter
             insert_pos = 0
@@ -2797,25 +2950,28 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
         link_skip_rules.add(28)
         link_skip_rules.add(29)
 
-    # If links-at-end is included, reference-links is included by default
-    if 29 not in link_skip_rules:
+    # links-after-occurrence implies reference links and overrides end/beginning placement
+    place_after_occurrence = (37 not in link_skip_rules) and not use_inline
+    if place_after_occurrence or 29 not in link_skip_rules:
         link_skip_rules.discard(28)
 
     use_reference = 28 not in link_skip_rules and not use_inline
-    place_at_beginning = (29 in link_skip_rules) and use_reference
+    place_at_beginning = (29 in link_skip_rules) and use_reference and not place_after_occurrence
 
+    changes_made = False
     if use_inline or use_reference:
-        new_lines = convert_links_in_document(lines, use_inline, use_reference, place_at_beginning)
+        new_lines = convert_links_in_document(
+            lines, use_inline, use_reference, place_at_beginning,
+            place_after_occurrence and use_reference,
+        )
         if new_lines != lines:
             lines = new_lines
-        # Even if conversion results in the same output, we don't want to force a rewrite.
-        # `changes_made` will be updated naturally by later passes if needed.
+            changes_made = True
 
     output = []
     in_code_block = False
     in_math_block = False  # Track if we're inside a display math block ($$...$$)
     i = 0
-    changes_made = False
     consecutive_blank_lines = 0
     current_list_indent_unit = None  # Cache the indent unit for the current list block
     list_context_stack = []  # Track list nesting: [(level, type, number), ...]
@@ -3098,6 +3254,8 @@ def process_file(filepath, wrap_width, overwrite=False, skip_rules=None, skip_st
         # Don't wrap certain lines
         if should_preserve_line(line):
             output.append(line)
+            # A preserved line, such as a link definition, breaks a blank-line run.
+            consecutive_blank_lines = 0
             i += 1
             continue
 
@@ -3838,6 +3996,25 @@ Examples:
                 skip_rules.add(30)
         elif 30 not in skip_rules:
             skip_rules.add(30)
+
+    # Rule 37 stays off unless an include list names it. include: all does not enable it.
+    rules = config.get('rules') if config else None
+    include_list = []
+    skip_list = []
+    if isinstance(rules, dict):
+        include_value = rules.get('include')
+        skip_value = rules.get('skip')
+        if isinstance(include_value, list):
+            include_list = include_value
+        if isinstance(skip_value, list):
+            skip_list = skip_value
+    explicitly_included = (
+        ('links-after-occurrence' in include_list or 37 in include_list)
+        and 'links-after-occurrence' not in skip_list
+        and 37 not in skip_list
+    )
+    if not explicitly_included:
+        skip_rules.add(37)
 
     # Parse skip rules from CLI (accepts both numbers and keywords)
     # Also supports sub-keywords: em-dash, guillemet (for typography rule)

@@ -2562,7 +2562,7 @@ fn convert_links_in_document(
                 matched_positions.insert(pos_key);
                 // Find the actual ref_id from definitions (could be different case)
                 let mut actual_ref_id: Option<String> = None;
-                for (def_ref_id, _) in ref_definitions.iter() {
+                for def_ref_id in ref_definitions.keys() {
                     if def_ref_id.to_lowercase().trim() == ref_id_normalized.to_lowercase().trim() {
                         // Extract the ID without brackets
                         if def_ref_id.starts_with('[') && def_ref_id.ends_with(']') {

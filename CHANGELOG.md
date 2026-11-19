@@ -1,8 +1,17 @@
 ### Unreleased
 
+### v0.1.43
+
+2026-11-19 07:54
+
 #### NEW
 
 - **Link definitions** can follow the block where each link first appears
+- Added changelog
+
+#### IMPROVED
+
+- Include changelog in GitHub releases
 
 ### v0.1.42
 
@@ -258,4 +267,3 @@
 #### FIXED
 
 - Fixed mangled VERSION constant line in rust/src/main.rs that was preventing compilation (was duplicated and merged incorrectly)
-

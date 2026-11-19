@@ -3294,7 +3294,11 @@ fn apply_rewrap_groups(
                 if wrapped_line.starts_with(wrap_prefix) {
                     output.push(format!("{}\n", wrapped_line));
                 } else {
-                    output.push(format!("{} {}\n", prefix.trim_end(), wrapped_line.trim_start()));
+                    output.push(format!(
+                        "{} {}\n",
+                        prefix.trim_end(),
+                        wrapped_line.trim_start()
+                    ));
                 }
             } else {
                 output.push(format!("{}\n", wrapped_line));
